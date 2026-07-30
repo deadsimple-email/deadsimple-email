@@ -16,7 +16,8 @@ LABEL org.opencontainers.image.source="https://github.com/deadsimple-email/deads
 LABEL org.opencontainers.image.description="Email for AI agents — real inboxes in one call"
 LABEL org.opencontainers.image.licenses="MIT"
 
-# DSE_API_KEY is supplied by the host at run time. Never bake a key in.
-ENV DSE_API_KEY=""
+# DSE_API_KEY is supplied by the host at run time (docker run -e / MCP host config).
+# Deliberately not declared as ENV — that trips the Docker "secrets in ENV" lint
+# and would bake an empty value that masks a genuinely missing key.
 
 ENTRYPOINT ["python", "-m", "deadsimple.mcp"]
