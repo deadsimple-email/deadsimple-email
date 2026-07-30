@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.2.2
+
+### Fixed
+- Pin `mcp>=1.26,<2` for the `[mcp]` extra. `mcp` 2.0.0 removed
+  `mcp.server.fastmcp` (renamed to `mcpserver`), so the previous `mcp>=1.0`
+  floor resolved to 2.0 and broke `import deadsimple.mcp` for anyone installing
+  fresh.
+
+### Added
+- Every MCP tool now carries a `title` and the applicable `readOnlyHint` /
+  `destructiveHint` / `idempotentHint` / `openWorldHint`. `delete_inbox` is the
+  only tool marked destructive. Required by the Claude Connectors Directory and
+  used by directory quality scores.
+- `DSE_MCP_ALLOWED_HOSTS` for hosting the remote transport under a real domain.
+
 ## 0.2.1
 
 ### Added
