@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "deadsimple": {
+      "command": "python",
+      "args": ["-m", "deadsimple.mcp"],
+      "env": {
+        "DSE_API_KEY": "${DSE_API_KEY}"
+      }
+    }
+  }
+}

@@ -1,0 +1,53 @@
+{
+  "name": "deadsimple-email",
+  "version": "0.2.0",
+  "description": "Dead Simple Email — TypeScript SDK for the email API for AI agents",
+  "license": "MIT",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    },
+    "./webhooks": {
+      "types": "./dist/webhooks.d.ts",
+      "import": "./dist/webhooks.mjs",
+      "require": "./dist/webhooks.js"
+    },
+    "./ai": {
+      "types": "./dist/ai.d.ts",
+      "import": "./dist/ai.mjs",
+      "require": "./dist/ai.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src/"
+  },
+  "keywords": [
+    "email",
+    "api",
+    "ai",
+    "agents",
+    "sdk",
+    "langchain",
+    "mcp"
+  ],
+  "homepage": "https://deadsimple.email",
+  "devDependencies": {
+    "tsup": "^8.0",
+    "typescript": "^5.5",
+    "vitest": "^2.0",
+    "@types/node": "^22"
+  }
+}

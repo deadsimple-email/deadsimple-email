@@ -1,0 +1,25 @@
+{
+  "name": "@deadsimple/email-skills",
+  "version": "0.1.0",
+  "description": "Dead Simple Email skills for Claude Code, Cursor, and Windsurf",
+  "license": "MIT",
+  "homepage": "https://deadsimple.email",
+  "keywords": [
+    "mcp",
+    "email",
+    "ai-agents",
+    "claude",
+    "cursor",
+    "skills"
+  ],
+  "files": [
+    "SKILL.md",
+    "mcp.json"
+  ],
+  "scripts": {},
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/deadsimple-email/deadsimple-email.git",
+    "directory": "skills"
+  }
+}
