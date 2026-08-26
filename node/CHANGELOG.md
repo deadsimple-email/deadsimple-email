@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.1
+
+Documentation only; no API change.
+
+- Document custom webhook delivery headers (`headers` on `webhooks.create`, plus
+  `webhooks.getHeaders` / `webhooks.setHeaders`). These shipped in 1.0.0 but were
+  only documented in the Python and Go SDKs.
+- Rewrite the webhook verification example to use `verifyRequest`, and show how to
+  retain the raw body. The previous example passed `req.body`, which is the parsed
+  object and never verifies.
+
+
 ## 1.0.0
 
 Republished under the `@deadsimple` organization scope. The package is now

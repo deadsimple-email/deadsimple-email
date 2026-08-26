@@ -109,23 +109,60 @@ const same = await client.inboxes.create({
 
 ## Webhook Signature Verification
 
-```typescript
-import { verifySignature } from "@deadsimple/email/webhooks";
+Every delivery is signed with HMAC-SHA256 over `"<timestamp>.<raw_body>"`. Pass the
+raw body and the request headers; `verifyRequest` reads whichever signature header
+the delivery carried, checks freshness, and compares in constant time.
 
-// In your webhook handler (Express, Hono, etc.):
+```typescript
+import { verifyRequest } from "@deadsimple/email/webhooks";
+
+// Keep the raw bytes: a parsed-and-restringified body will not verify.
+app.use(express.json({ verify: (req, _res, buf) => { (req as any).rawBody = buf; } }));
+
 app.post("/webhook", (req, res) => {
   try {
-    verifySignature({
-      payload: req.body,
-      signature: req.headers["x-dse-signature"],
+    verifyRequest({
+      payload: (req as any).rawBody,
+      headers: req.headers,
       secret: "whsec_your_signing_secret",
     });
-    // Valid — process the event
   } catch {
-    res.status(401).send("Invalid signature");
+    return res.status(401).send("Invalid signature");
   }
+  res.sendStatus(200);   // return fast, then do the work
 });
 ```
+
+`verifyRequest` also accepts a fetch `Headers` object, for Hono, Next.js route
+handlers, and workers. `verifySignature` is the lower-level form when you already
+have the header value; pass `timestamp` alongside a `sha256=` signature, which
+carries none of its own.
+
+Deliveries are retried on non-2xx or timeout, so handlers must be idempotent. Key
+on `message_id`, not on receipt.
+
+## Custom delivery headers
+
+If your endpoint enforces its own auth, register the headers it requires. They are
+sent on every delivery attempt and every retry.
+
+```typescript
+const wh = await client.webhooks.create({
+  url: "https://your-app.com/webhook",
+  events: ["message.received"],
+  headers: { Authorization: "Bearer your-endpoint-token" },
+});
+
+// Rotate later without recreating the webhook, which would change its secret.
+await client.webhooks.setHeaders(wh.webhook_id, { Authorization: "Bearer rotated" });
+
+await client.webhooks.getHeaders(wh.webhook_id); // names only, values masked
+await client.webhooks.setHeaders(wh.webhook_id, {}); // clear them
+```
+
+Values are write-only: every response returns them masked. Up to 10 headers, 1024
+characters per value, printable ASCII. `Content-Type`, `Host`, `User-Agent`,
+hop-by-hop headers and `X-DSE-*` are reserved.
 
 ## Error Handling
 

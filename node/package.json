@@ -1,6 +1,6 @@
 {
   "name": "@deadsimple/email",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Dead Simple Email \u2014 TypeScript SDK for the email API for AI agents",
   "license": "MIT",
   "main": "./dist/index.js",

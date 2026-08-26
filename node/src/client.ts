@@ -49,7 +49,7 @@ import type {
 } from "./types.js";
 
 const DEFAULT_BASE_URL = "https://api.deadsimple.email";
-const VERSION = "1.0.0";
+const VERSION = "1.0.1";
 
 export interface DeadSimpleOptions {
   baseUrl?: string;
