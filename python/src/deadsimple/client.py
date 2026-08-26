@@ -558,11 +558,19 @@ class _Webhooks:
     def __init__(self, client: DeadSimple):
         self._c = client
 
-    def create(self, url: str, events: list[str], description: str = "", *, idempotency_key: str | None = None) -> Webhook:
-        """Register a webhook. Returns signing secret (shown once)."""
+    def create(self, url: str, events: list[str], description: str = "", *, headers: dict[str, str] | None = None, idempotency_key: str | None = None) -> Webhook:
+        """Register a webhook. Returns signing secret (shown once).
+
+        `headers` are sent on every delivery attempt (and every retry), for
+        endpoints that require their own auth, e.g.
+        `headers={"Authorization": "Bearer ..."}`. Values are write-only: the
+        API masks them in every response.
+        """
         body: dict[str, Any] = {"url": url, "events": events}
         if description:
             body["description"] = description
+        if headers:
+            body["headers"] = headers
         return Webhook.from_dict(self._c._request("POST", "/v1/webhooks", json=body, idempotency_key=idempotency_key))
 
     def list(self) -> WebhookList:
@@ -572,6 +580,15 @@ class _Webhooks:
     def delete(self, webhook_id: str) -> None:
         """Delete a webhook."""
         self._c._request("DELETE", f"/v1/webhooks/{webhook_id}")
+
+    def get_headers(self, webhook_id: str) -> dict[str, str]:
+        """Custom delivery header names for a webhook (values masked)."""
+        return self._c._request("GET", f"/v1/webhooks/{webhook_id}/headers").get("headers", {})
+
+    def set_headers(self, webhook_id: str, headers: dict[str, str]) -> dict[str, str]:
+        """Replace the custom delivery headers. Pass `{}` to clear them."""
+        resp = self._c._request("PUT", f"/v1/webhooks/{webhook_id}/headers", json={"headers": headers})
+        return resp.get("headers", {})
 
 
 class _Domains:
@@ -899,10 +916,12 @@ class _AsyncWebhooks:
     def __init__(self, client: AsyncDeadSimple):
         self._c = client
 
-    async def create(self, url: str, events: list[str], description: str = "", *, idempotency_key: str | None = None) -> Webhook:
+    async def create(self, url: str, events: list[str], description: str = "", *, headers: dict[str, str] | None = None, idempotency_key: str | None = None) -> Webhook:
         body: dict[str, Any] = {"url": url, "events": events}
         if description:
             body["description"] = description
+        if headers:
+            body["headers"] = headers
         return Webhook.from_dict(await self._c._request("POST", "/v1/webhooks", json=body, idempotency_key=idempotency_key))
 
     async def list(self) -> WebhookList:
@@ -910,6 +929,14 @@ class _AsyncWebhooks:
 
     async def delete(self, webhook_id: str) -> None:
         await self._c._request("DELETE", f"/v1/webhooks/{webhook_id}")
+
+    async def get_headers(self, webhook_id: str) -> dict[str, str]:
+        resp = await self._c._request("GET", f"/v1/webhooks/{webhook_id}/headers")
+        return resp.get("headers", {})
+
+    async def set_headers(self, webhook_id: str, headers: dict[str, str]) -> dict[str, str]:
+        resp = await self._c._request("PUT", f"/v1/webhooks/{webhook_id}/headers", json={"headers": headers})
+        return resp.get("headers", {})
 
 
 class _AsyncDomains:

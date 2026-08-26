@@ -1,7 +1,7 @@
 {
   "name": "deadsimple-email",
-  "version": "0.2.0",
-  "description": "Dead Simple Email — TypeScript SDK for the email API for AI agents",
+  "version": "0.3.0",
+  "description": "Dead Simple Email \u2014 TypeScript SDK for the email API for AI agents",
   "license": "MIT",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",

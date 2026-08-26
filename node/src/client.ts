@@ -49,7 +49,7 @@ import type {
 } from "./types.js";
 
 const DEFAULT_BASE_URL = "https://api.deadsimple.email";
-const VERSION = "0.2.0";
+const VERSION = "0.3.0";
 
 export interface DeadSimpleOptions {
   baseUrl?: string;
@@ -612,11 +612,19 @@ class Threads {
 class Webhooks {
   constructor(private client: DeadSimple) {}
 
-  /** Register a webhook. Returns signing secret (shown once). */
+  /**
+   * Register a webhook. Returns signing secret (shown once).
+   *
+   * `headers` are sent on every delivery attempt (and every retry), for
+   * endpoints that require their own auth, e.g.
+   * `headers: { Authorization: "Bearer ..." }`. Values are write-only: the API
+   * masks them in every response.
+   */
   async create(opts: {
     url: string;
     events: string[];
     description?: string;
+    headers?: Record<string, string>;
     idempotencyKey?: string;
   }): Promise<Webhook> {
     const body: Record<string, unknown> = {
@@ -624,6 +632,7 @@ class Webhooks {
       events: opts.events,
     };
     if (opts.description) body.description = opts.description;
+    if (opts.headers) body.headers = opts.headers;
     return this.client._request("POST", "/v1/webhooks", {
       body,
       idempotencyKey: opts.idempotencyKey,
@@ -638,6 +647,28 @@ class Webhooks {
   /** Delete a webhook. */
   async delete(webhookId: string): Promise<void> {
     await this.client._request("DELETE", `/v1/webhooks/${webhookId}`);
+  }
+
+  /** Custom delivery header names for a webhook (values masked). */
+  async getHeaders(webhookId: string): Promise<Record<string, string>> {
+    const resp = await this.client._request<{ headers?: Record<string, string> }>(
+      "GET",
+      `/v1/webhooks/${webhookId}/headers`,
+    );
+    return resp.headers ?? {};
+  }
+
+  /** Replace the custom delivery headers. Pass `{}` to clear them. */
+  async setHeaders(
+    webhookId: string,
+    headers: Record<string, string>,
+  ): Promise<Record<string, string>> {
+    const resp = await this.client._request<{ headers?: Record<string, string> }>(
+      "PUT",
+      `/v1/webhooks/${webhookId}/headers`,
+      { body: { headers } },
+    );
+    return resp.headers ?? {};
   }
 }
 

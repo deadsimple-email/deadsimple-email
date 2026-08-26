@@ -57,8 +57,13 @@ for t in threads.threads:
 webhook = client.webhooks.create(
     url="https://your-app.com/webhook",
     events=["message.received"],
+    # Optional: headers your endpoint requires, sent on every attempt and retry
+    headers={"Authorization": "Bearer your-endpoint-token"},
 )
 print(f"Webhook secret: {webhook.signing_secret}")
+
+# Rotate or clear those headers later
+client.webhooks.set_headers(webhook.webhook_id, {"Authorization": "Bearer rotated"})
 ```
 
 ## Agent Self-Onboarding (OTP / magic links)

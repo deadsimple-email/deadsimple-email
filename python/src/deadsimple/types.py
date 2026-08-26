@@ -232,6 +232,8 @@ class Webhook:
     last_triggered_at: str | None = None
     failure_count: int = 0
     signing_secret: str | None = None
+    # Custom delivery headers. Values are masked by the API (write-only).
+    headers: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> Webhook:

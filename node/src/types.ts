@@ -165,6 +165,8 @@ export interface Webhook {
   last_triggered_at?: string;
   failure_count: number;
   signing_secret?: string;
+  /** Custom delivery headers. Values are masked by the API (write-only). */
+  headers?: Record<string, string>;
 }
 
 export interface WebhookList {

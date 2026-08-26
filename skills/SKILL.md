@@ -24,6 +24,11 @@ Email API for AI agents. Create inboxes, send/receive email, manage threads and 
 - **read_messages** — List recent messages in an inbox
 - **read_message** — Read a single message with full body content
 
+### Signup and verification
+- **wait_for_email** — Block until a matching message arrives (only counts mail arriving after the call)
+- **get_verification_code** — Wait for a verification email and return the extracted one-time code
+- **get_verification_link** — Wait for a verification email and return the extracted confirmation link
+
 ### Threads
 - **list_threads** — List conversation threads in an inbox
 - **read_thread** — Read all messages in a conversation thread

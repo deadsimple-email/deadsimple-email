@@ -1,0 +1,69 @@
+name: publish-npm
+
+# Publishes the TypeScript SDK to npm using trusted publishing (OIDC).
+#
+# No token is involved. npm verifies the OIDC claim from this workflow against a
+# trusted publisher configured on the package, so nothing needs to be stored in
+# a secret and nothing expires. This also survives npm's January 2027 removal of
+# direct publishing with 2FA-bypass tokens.
+#
+# One-time setup on npmjs.com (needs an interactive 2FA session):
+#   Package settings -> Trusted publisher -> GitHub Actions
+#     Organization or user: deadsimple-email
+#     Repository:           deadsimple-email
+#     Workflow filename:    publish-npm.yml
+#
+# Release: bump the version in node/package.json, push, then either run this
+# workflow manually or push a tag matching node-v*.
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "node-v*"
+
+permissions:
+  contents: read
+  id-token: write # required for trusted publishing
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: node
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      # Trusted publishing requires npm 11.5.1 or newer.
+      - name: Use a trusted-publishing-capable npm
+        run: npm install -g npm@latest
+
+      - name: Install
+        run: npm install --no-audit --no-fund
+
+      - name: Test
+        run: npm test
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Refuse to republish an existing version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if npm view "deadsimple-email@$VERSION" version > /dev/null 2>&1; then
+            echo "deadsimple-email@$VERSION is already published; bump the version first."
+            exit 1
+          fi
+          echo "publishing deadsimple-email@$VERSION"
+
+      - name: Publish
+        run: npm publish --provenance --access public

@@ -30,8 +30,9 @@ from deadsimple.exceptions import (
     ValidationError,
 )
 from deadsimple.types import WebhookEvent
+from deadsimple.webhooks import verify_request, verify_signature
 
-__version__ = "0.1.1"
+__version__ = "0.3.0"
 __all__ = [
     "DeadSimple",
     "AsyncDeadSimple",
@@ -42,4 +43,6 @@ __all__ = [
     "RateLimitError",
     "ValidationError",
     "WebhookEvent",
+    "verify_signature",
+    "verify_request",
 ]
