@@ -12,7 +12,7 @@
  *
  * @example
  * ```ts
- * import { verifyRequest } from "deadsimple-email/webhooks";
+ * import { verifyRequest } from "@deadsimple/email/webhooks";
  *
  * // In your webhook handler (e.g., Express, Hono):
  * verifyRequest({

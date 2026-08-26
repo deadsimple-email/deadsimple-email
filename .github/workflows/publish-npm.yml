@@ -1,6 +1,6 @@
 name: publish-npm
 
-# Publishes the TypeScript SDK to npm using trusted publishing (OIDC).
+# Publishes @deadsimple/email to npm using trusted publishing (OIDC).
 #
 # No token is involved. npm verifies the OIDC claim from this workflow against a
 # trusted publisher configured on the package, so nothing needs to be stored in
@@ -59,11 +59,11 @@ jobs:
       - name: Refuse to republish an existing version
         run: |
           VERSION=$(node -p "require('./package.json').version")
-          if npm view "deadsimple-email@$VERSION" version > /dev/null 2>&1; then
-            echo "deadsimple-email@$VERSION is already published; bump the version first."
+          if npm view "@deadsimple/email@$VERSION" version > /dev/null 2>&1; then
+            echo "@deadsimple/email@$VERSION is already published; bump the version first."
             exit 1
           fi
-          echo "publishing deadsimple-email@$VERSION"
+          echo "publishing @deadsimple/email@$VERSION"
 
       - name: Publish
         run: npm publish --provenance --access public

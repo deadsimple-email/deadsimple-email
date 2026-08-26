@@ -5,7 +5,7 @@
  * ```ts
  * import { generateText } from "ai";
  * import { openai } from "@ai-sdk/openai";
- * import { getTools } from "deadsimple-email/ai";
+ * import { getTools } from "@deadsimple/email/ai";
  *
  * const tools = getTools("dse_your_api_key");
  * const result = await generateText({

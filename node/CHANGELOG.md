@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.0.0
+
+Republished under the `@deadsimple` organization scope. The package is now
+`@deadsimple/email`; the old unscoped `deadsimple-email` name is retired.
+
+```
+npm install @deadsimple/email
+```
+
+Functionally identical to 0.3.0. Version reset to 1.0.0 because the scoped
+package starts its own history.
+
+
 ## 0.3.0
 
 ### Fixed

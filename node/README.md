@@ -11,13 +11,13 @@ The official TypeScript SDK for [Dead Simple Email](https://deadsimple.email), t
 ## Install
 
 ```bash
-npm install deadsimple-email
+npm install @deadsimple/email
 ```
 
 ## Quick Start
 
 ```typescript
-import { DeadSimple } from "deadsimple-email";
+import { DeadSimple } from "@deadsimple/email";
 
 const client = new DeadSimple("dse_your_api_key");
 
@@ -110,7 +110,7 @@ const same = await client.inboxes.create({
 ## Webhook Signature Verification
 
 ```typescript
-import { verifySignature } from "deadsimple-email/webhooks";
+import { verifySignature } from "@deadsimple/email/webhooks";
 
 // In your webhook handler (Express, Hono, etc.):
 app.post("/webhook", (req, res) => {
@@ -135,7 +135,7 @@ import {
   NotFoundError,
   RateLimitError,
   ValidationError,
-} from "deadsimple-email";
+} from "@deadsimple/email";
 
 const client = new DeadSimple("dse_your_api_key");
 

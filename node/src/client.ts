@@ -3,7 +3,7 @@
  *
  * @example
  * ```ts
- * import { DeadSimple } from "deadsimple-email";
+ * import { DeadSimple } from "@deadsimple/email";
  *
  * const client = new DeadSimple("dse_your_api_key");
  * const inbox = await client.inboxes.create({ displayName: "Support Bot" });
@@ -49,7 +49,7 @@ import type {
 } from "./types.js";
 
 const DEFAULT_BASE_URL = "https://api.deadsimple.email";
-const VERSION = "0.3.0";
+const VERSION = "1.0.0";
 
 export interface DeadSimpleOptions {
   baseUrl?: string;
@@ -801,7 +801,7 @@ class Attachments {
  *
  * @example
  * ```ts
- * import { WebSocketStream } from "deadsimple-email";
+ * import { WebSocketStream } from "@deadsimple/email";
  *
  * const stream = new WebSocketStream("dse_your_api_key");
  * await stream.connect();

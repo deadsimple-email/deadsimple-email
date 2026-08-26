@@ -73,7 +73,7 @@ body.
 
 ```bash
 pip install deadsimple-email
-npm install deadsimple-email
+npm install @deadsimple/email
 ```
 
 ```python
