@@ -1,5 +1,33 @@
 # Changelog
 
+## 1.1.0
+
+### Added
+- Image and file sending. `messages.send()`, `reply()`, `replyAll()` and
+  `forward()` take `images` (rendered in the body) and `attachments`
+  (delivered as downloads). Each entry is a local path, an https URL, a
+  `Uint8Array`, or a reference from `attachments.upload()`:
+
+  ```ts
+  await client.messages.send({
+    inboxId: inbox.inbox_id,
+    to: "contractor@example.com",
+    subject: "Site photos",
+    textBody: "Photos below.",
+    images: ["/abs/path/door.jpg", "https://example.com/ceiling.jpg"],
+  });
+  ```
+
+- `attachments.upload()` stages a file and returns a reference reusable across
+  messages. Files upload out of band, so full-size photos work: a send request
+  itself cannot carry more than a few megabytes.
+
+### Fixed
+- Google Drive share links (`/file/d/<id>/view`) are rewritten to their direct
+  download form. Fetched verbatim they return an HTML viewer page, which would
+  otherwise be attached as though it were the photo. A link that still returns
+  HTML now throws an error naming link-sharing as the cause.
+
 ## 1.0.1
 
 Documentation only; no API change.

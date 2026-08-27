@@ -49,7 +49,7 @@ import type {
 } from "./types.js";
 
 const DEFAULT_BASE_URL = "https://api.deadsimple.email";
-const VERSION = "1.0.1";
+const VERSION = "1.1.0";
 
 export interface DeadSimpleOptions {
   baseUrl?: string;
@@ -282,12 +282,21 @@ class Messages {
     bcc?: string[];
     replyTo?: string;
     headers?: Record<string, string>;
+    /** Photos to render IN the body: file path, https URL, Buffer, or an upload() ref. */
+    images?: AttachmentSource[];
+    /** Files to attach as downloads. Same accepted forms as `images`. */
+    attachments?: AttachmentSource[];
     idempotencyKey?: string;
   }): Promise<SendResult> {
     const body: Record<string, unknown> = {
       to: Array.isArray(opts.to) ? opts.to : [opts.to],
       subject: opts.subject,
     };
+    const prepared = await this.client.attachments._prepare(
+      opts.attachments,
+      opts.images,
+    );
+    if (prepared.length) body.attachments = prepared;
     if (opts.textBody) body.text_body = opts.textBody;
     if (opts.htmlBody) body.html_body = opts.htmlBody;
     if (opts.cc) body.cc = opts.cc;
@@ -380,11 +389,21 @@ class Messages {
   async reply(
     inboxId: string,
     messageId: string,
-    opts: { textBody?: string; htmlBody?: string }
+    opts: {
+      textBody?: string;
+      htmlBody?: string;
+      images?: AttachmentSource[];
+      attachments?: AttachmentSource[];
+    }
   ): Promise<SendResult> {
     const body: Record<string, unknown> = {};
     if (opts.textBody) body.text_body = opts.textBody;
     if (opts.htmlBody) body.html_body = opts.htmlBody;
+    const preparedreply = await this.client.attachments._prepare(
+      opts.attachments,
+      opts.images,
+    );
+    if (preparedreply.length) body.attachments = preparedreply;
     return this.client._request(
       "POST",
       `/v1/inboxes/${inboxId}/messages/${messageId}/reply`,
@@ -396,11 +415,21 @@ class Messages {
   async replyAll(
     inboxId: string,
     messageId: string,
-    opts: { textBody?: string; htmlBody?: string }
+    opts: {
+      textBody?: string;
+      htmlBody?: string;
+      images?: AttachmentSource[];
+      attachments?: AttachmentSource[];
+    }
   ): Promise<SendResult> {
     const body: Record<string, unknown> = {};
     if (opts.textBody) body.text_body = opts.textBody;
     if (opts.htmlBody) body.html_body = opts.htmlBody;
+    const preparedreplyAll = await this.client.attachments._prepare(
+      opts.attachments,
+      opts.images,
+    );
+    if (preparedreplyAll.length) body.attachments = preparedreplyAll;
     return this.client._request(
       "POST",
       `/v1/inboxes/${inboxId}/messages/${messageId}/reply-all`,
@@ -412,13 +441,24 @@ class Messages {
   async forward(
     inboxId: string,
     messageId: string,
-    opts: { to: string | string[]; textBody?: string; htmlBody?: string }
+    opts: {
+      to: string | string[];
+      textBody?: string;
+      htmlBody?: string;
+      images?: AttachmentSource[];
+      attachments?: AttachmentSource[];
+    }
   ): Promise<SendResult> {
     const body: Record<string, unknown> = {
       to: Array.isArray(opts.to) ? opts.to : [opts.to],
     };
     if (opts.textBody) body.text_body = opts.textBody;
     if (opts.htmlBody) body.html_body = opts.htmlBody;
+    const preparedFwd = await this.client.attachments._prepare(
+      opts.attachments,
+      opts.images,
+    );
+    if (preparedFwd.length) body.attachments = preparedFwd;
     return this.client._request(
       "POST",
       `/v1/inboxes/${inboxId}/messages/${messageId}/forward`,
@@ -780,8 +820,166 @@ class UsageResource {
   }
 }
 
+
+// ── Attachment sources ───────────────────────────────────────────────────────
+
+const BLOCKED_FETCH_HOSTS = new Set([
+  "169.254.169.254",
+  "metadata.google.internal",
+  "localhost",
+  "127.0.0.1",
+  "::1",
+]);
+
+const MAX_FETCH_BYTES = 25 * 1024 * 1024;
+
+const EXT_TYPES: Record<string, string> = {
+  jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", gif: "image/gif",
+  webp: "image/webp", heic: "image/heic", pdf: "application/pdf",
+  txt: "text/plain", csv: "text/csv", zip: "application/zip",
+};
+
+function guessType(name: string): string {
+  const ext = name.includes(".") ? name.split(".").pop()!.toLowerCase() : "";
+  return EXT_TYPES[ext] ?? "application/octet-stream";
+}
+
+/**
+ * Read a path, URL or bytes into upload-ready data.
+ *
+ * The URL branch also runs server-side in hosted connectors, where the URL is
+ * whatever an agent was handed — so internal addresses are refused rather than
+ * turned into a request from our own network.
+ */
+/**
+ * Rewrite a Google Drive share link to its direct-download form.
+ *
+ * A .../file/d/<id>/view link serves an HTML viewer page, so fetching it
+ * verbatim attaches a web page named "view" instead of the photo.
+ */
+function directDownloadUrl(url: string): string {
+  const file = url.match(/^https?:\/\/drive\.google\.com\/file\/d\/([^/]+)/);
+  if (file) return `https://drive.google.com/uc?export=download&id=${file[1]}`;
+  const open = url.match(/^https?:\/\/drive\.google\.com\/open\?id=([^&]+)/);
+  if (open) return `https://drive.google.com/uc?export=download&id=${open[1]}`;
+  return url;
+}
+
+async function readSource(
+  source: string | Uint8Array,
+  opts?: { expectImage?: boolean },
+): Promise<{ data: Uint8Array; filename: string; contentType: string }> {
+  if (typeof source !== "string") {
+    return { data: source, filename: "attachment", contentType: "application/octet-stream" };
+  }
+
+  if (/^https?:\/\//i.test(source)) {
+    source = directDownloadUrl(source);
+    const url = new URL(source);
+    if (BLOCKED_FETCH_HOSTS.has(url.hostname.toLowerCase())) {
+      throw new ValidationError(`Refusing to fetch ${source}`, { code: "blocked_url" });
+    }
+    const resp = await fetch(source, { redirect: "manual" });
+    if (!resp.ok) {
+      throw new ValidationError(`Could not fetch ${source}: ${resp.status}`, {
+        code: "fetch_failed",
+      });
+    }
+    const data = new Uint8Array(await resp.arrayBuffer());
+    if (data.byteLength > MAX_FETCH_BYTES) {
+      throw new ValidationError(`${source} is larger than 25 MB`, { code: "too_large" });
+    }
+    const filename = decodeURIComponent(url.pathname.split("/").pop() || "image");
+    const contentType =
+      resp.headers.get("content-type")?.split(";")[0]?.trim() || guessType(filename);
+
+    // A share link that still returns HTML is a permissions page, not a file.
+    // Attaching it silently would mail the recipient a login screen.
+    if (opts?.expectImage && !contentType.startsWith("image/")) {
+      throw new ValidationError(
+        `${source} returned ${contentType || "no content type"} rather than an image. ` +
+          "If it is a Google Drive link, the file must be shared as 'anyone with the " +
+          "link'; otherwise pass a direct image URL or a local path.",
+        { code: "not_an_image" },
+      );
+    }
+    return { data, filename, contentType };
+  }
+
+  const { readFile } = await import("node:fs/promises");
+  const { basename } = await import("node:path");
+  const data = new Uint8Array(await readFile(source));
+  const filename = basename(source);
+  return { data, filename, contentType: guessType(filename) };
+}
+
+export type AttachmentSource =
+  | string
+  | Uint8Array
+  | { attachment_id: string; inline?: boolean };
+
 class Attachments {
   constructor(private client: DeadSimple) {}
+
+  /**
+   * Upload a file, URL or bytes and get a reference usable on any message.
+   *
+   * The bytes go straight to storage rather than through the send request,
+   * which is what allows real photos: a send call cannot carry more than a few
+   * megabytes.
+   */
+  async upload(
+    source: string | Uint8Array,
+    opts?: { filename?: string; contentType?: string; inline?: boolean },
+  ): Promise<{ attachment_id: string; inline?: boolean }> {
+    const { data, filename, contentType } = await readSource(source, {
+      expectImage: opts?.inline,
+    });
+    const name = opts?.filename ?? filename;
+    const type = opts?.contentType ?? contentType;
+
+    const staged = await this.client._request<{
+      attachment_id: string;
+      upload_url: string;
+    }>("POST", "/v1/attachments", {
+      body: { filename: name, content_type: type, size: data.byteLength },
+    });
+
+    const put = await fetch(staged.upload_url, {
+      method: "PUT",
+      body: data as BodyInit,
+      headers: { "Content-Type": type },
+    });
+    if (!put.ok) {
+      throw new DeadSimpleError(`Attachment upload failed: ${put.status}`, {
+        statusCode: put.status,
+      });
+    }
+
+    return opts?.inline
+      ? { attachment_id: staged.attachment_id, inline: true }
+      : { attachment_id: staged.attachment_id };
+  }
+
+  /** @internal Normalize send()'s attachments/images into API entries. */
+  async _prepare(
+    attachments?: AttachmentSource[],
+    images?: AttachmentSource[],
+  ): Promise<Array<Record<string, unknown>>> {
+    const pairs: Array<[AttachmentSource, boolean]> = [
+      ...(attachments ?? []).map((a) => [a, false] as [AttachmentSource, boolean]),
+      ...(images ?? []).map((i) => [i, true] as [AttachmentSource, boolean]),
+    ];
+    const out: Array<Record<string, unknown>> = [];
+    for (const [source, inline] of pairs) {
+      if (typeof source === "object" && "attachment_id" in source) {
+        out.push(inline ? { ...source, inline: true } : { ...source });
+      } else {
+        out.push(await this.upload(source, { inline }));
+      }
+    }
+    return out;
+  }
 
   /** Get a time-limited signed download URL for an attachment. */
   async getUrl(

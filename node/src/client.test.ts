@@ -215,6 +215,98 @@ describe("idempotency", () => {
   });
 });
 
+// ── Webhook custom headers ───────────────────────────────────────────────────
+
+describe("webhook custom headers", () => {
+  const webhookData = {
+    webhook_id: "wh_001",
+    url: "https://example.com/hook",
+    events: ["message.received"],
+    description: "",
+    is_active: true,
+    created_at: "2025-01-01T00:00:00Z",
+    failure_count: 0,
+  };
+
+  function bodyOf(callIndex: number) {
+    return JSON.parse(
+      (mockFetch.mock.calls[callIndex][1] as RequestInit).body as string
+    );
+  }
+
+  it("sends custom headers on create and returns them masked", async () => {
+    mockFetch.mockResolvedValueOnce(
+      mockResponse(201, wrap({ ...webhookData, headers: { Authorization: "***3456" } }))
+    );
+
+    const client = new DeadSimple(API_KEY);
+    const wh = await client.webhooks.create({
+      url: "https://example.com/hook",
+      events: ["message.received"],
+      headers: { Authorization: "Bearer tok_abcdef123456" },
+    });
+
+    expect(bodyOf(0).headers).toEqual({ Authorization: "Bearer tok_abcdef123456" });
+    expect(wh.headers).toEqual({ Authorization: "***3456" });
+  });
+
+  it("omits the headers key when none are given", async () => {
+    mockFetch.mockResolvedValueOnce(mockResponse(201, wrap(webhookData)));
+
+    const client = new DeadSimple(API_KEY);
+    await client.webhooks.create({
+      url: "https://example.com/hook",
+      events: ["message.received"],
+    });
+
+    expect(bodyOf(0)).not.toHaveProperty("headers");
+  });
+
+  it("reads masked headers", async () => {
+    mockFetch.mockResolvedValueOnce(
+      mockResponse(200, wrap({ webhook_id: "wh_001", headers: { Authorization: "***3456" } }))
+    );
+
+    const client = new DeadSimple(API_KEY);
+    await expect(client.webhooks.getHeaders("wh_001")).resolves.toEqual({
+      Authorization: "***3456",
+    });
+    expect(mockFetch.mock.calls[0][0]).toBe(`${BASE}/v1/webhooks/wh_001/headers`);
+  });
+
+  it("replaces headers with a PUT", async () => {
+    mockFetch.mockResolvedValueOnce(
+      mockResponse(200, wrap({ webhook_id: "wh_001", headers: { Authorization: "***9999" } }))
+    );
+
+    const client = new DeadSimple(API_KEY);
+    const result = await client.webhooks.setHeaders("wh_001", {
+      Authorization: "Bearer rotated_9999",
+    });
+
+    expect((mockFetch.mock.calls[0][1] as RequestInit).method).toBe("PUT");
+    expect(bodyOf(0)).toEqual({ headers: { Authorization: "Bearer rotated_9999" } });
+    expect(result).toEqual({ Authorization: "***9999" });
+  });
+
+  it("clears headers with an empty map", async () => {
+    mockFetch.mockResolvedValueOnce(
+      mockResponse(200, wrap({ webhook_id: "wh_001", headers: {} }))
+    );
+
+    const client = new DeadSimple(API_KEY);
+    await expect(client.webhooks.setHeaders("wh_001", {})).resolves.toEqual({});
+    expect(bodyOf(0)).toEqual({ headers: {} });
+  });
+
+  it("defaults to an empty map when the API omits headers", async () => {
+    mockFetch.mockResolvedValueOnce(mockResponse(200, wrap({ webhook_id: "wh_001" })));
+
+    const client = new DeadSimple(API_KEY);
+    await expect(client.webhooks.getHeaders("wh_001")).resolves.toEqual({});
+  });
+});
+
 // ── Webhook verification ─────────────────────────────────────────────────────
 
 describe("webhook verification", () => {
@@ -338,5 +430,56 @@ describe("parity resources", () => {
     const client = new DeadSimple(API_KEY);
     const msg = await client.messages.waitFor("inb_1", { timeoutMs: 10, pollIntervalMs: 0 });
     expect(msg).toBeNull();
+  });
+});
+
+// ── Attachments & inline images ──────────────────────────────────────────────
+
+describe("outbound attachments", () => {
+  it("uploads images and marks them inline", async () => {
+    mockFetch
+      .mockResolvedValueOnce(mockResponse(201, wrap({
+        attachment_id: "att_1", upload_url: "https://s3.example/put",
+      })))
+      .mockResolvedValueOnce(new Response(null, { status: 200 }))
+      .mockResolvedValueOnce(mockResponse(201, wrap({
+        message_id: "m1", status: "sent",
+      })));
+
+    const client = new DeadSimple(API_KEY);
+    await client.messages.send({
+      inboxId: "inb_1", to: "a@b.com", subject: "Photos", textBody: "see below",
+      images: [new Uint8Array([1, 2, 3])],
+    });
+
+    const sendCall = mockFetch.mock.calls[2];
+    const body = JSON.parse((sendCall[1] as RequestInit).body as string);
+    expect(body.attachments).toEqual([{ attachment_id: "att_1", inline: true }]);
+  });
+
+  it("supports images on reply", async () => {
+    mockFetch
+      .mockResolvedValueOnce(mockResponse(201, wrap({
+        attachment_id: "att_r", upload_url: "https://s3.example/r",
+      })))
+      .mockResolvedValueOnce(new Response(null, { status: 200 }))
+      .mockResolvedValueOnce(mockResponse(201, wrap({ message_id: "m2", status: "sent" })));
+
+    const client = new DeadSimple(API_KEY);
+    await client.messages.reply("inb_1", "m_1", {
+      textBody: "see photo", images: [new Uint8Array([9])],
+    });
+
+    const body = JSON.parse((mockFetch.mock.calls[2][1] as RequestInit).body as string);
+    expect(body.attachments).toEqual([{ attachment_id: "att_r", inline: true }]);
+  });
+
+  it("sends no attachments key when none are given", async () => {
+    mockFetch.mockResolvedValueOnce(mockResponse(201, wrap({ message_id: "m3", status: "sent" })));
+    await new DeadSimple(API_KEY).messages.send({
+      inboxId: "inb_1", to: "a@b.com", subject: "s", textBody: "t",
+    });
+    const body = JSON.parse((mockFetch.mock.calls[0][1] as RequestInit).body as string);
+    expect(body).not.toHaveProperty("attachments");
   });
 });
