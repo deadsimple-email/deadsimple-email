@@ -127,6 +127,7 @@ class DeadSimple:
         self.attachments = _Attachments(self)
         self.filters = _Filters(self)
         self.templates = _Templates(self)
+        self.identity = _Identity(self)
 
     def _request(
         self,
@@ -197,6 +198,7 @@ class AsyncDeadSimple:
         self.attachments = _AsyncAttachments(self)
         self.filters = _AsyncFilters(self)
         self.templates = _AsyncTemplates(self)
+        self.identity = _AsyncIdentity(self)
 
     async def _request(
         self,
@@ -317,12 +319,66 @@ class _Messages:
         send_at: str | None = None,
         template_id: str | None = None,
         variables: dict[str, str] | None = None,
+        attachments: list[Any] | None = None,
+        images: list[Any] | None = None,
+        in_reply_to: str | None = None,
+        references: list[str] | None = None,
+        calendar_invite: dict[str, Any] | None = None,
         idempotency_key: str | None = None,
     ) -> SendResult:
-        """Send an email. Pass `send_at` to schedule, `template_id` + `variables` to use a template."""
+        """Send an email. Pass `send_at` to schedule, `template_id` + `variables` to use a template.
+
+        `in_reply_to` threads this send onto an existing conversation. Pass
+        either a `message_id` from this inbox or a raw Message-ID header; the
+        Re: subject is still yours to set. Use it when you need a reply that
+        also carries its own recipient list, otherwise `reply()` is simpler.
+
+        `images` render in the body; `attachments` arrive as downloads. Both
+        accept a file path, an http(s) URL, raw bytes, or a reference returned
+        by `client.attachments.upload()`::
+
+            client.messages.send(
+                inbox_id=inbox.inbox_id,
+                to="contractor@example.com",
+                subject="Photos - 124 Lakeshore Dr",
+                text_body="Photos of the four jobs below.",
+                images=["./door.jpg", "./ceiling.jpg"],
+            )
+
+        Files are uploaded before the send, so size is not limited by the
+        request body.
+
+        `calendar_invite` makes the message a real invitation, with
+        Accept/Decline in the recipient's mail client and the event on their
+        calendar. Attaching an .ics file does not do this; the event has to
+        ride in the body, which is what this builds::
+
+            r = client.messages.send(
+                inbox_id=inbox.inbox_id,
+                to="tommy@example.com",
+                subject="Roof inspection Tuesday",
+                text_body="Proposing Tuesday at 3.",
+                calendar_invite={
+                    "title": "Roof inspection - 124 Lakeshore Dr",
+                    "start": "2026-09-15T15:00:00",
+                    "timezone": "America/New_York",
+                    "duration_minutes": 45,
+                    "location": "124 Lakeshore Dr",
+                },
+            )
+            r.calendar_uid  # keep this to reschedule or cancel later
+
+        Attendees default to `to` + `cc`. Times need a zone: either an offset,
+        a trailing "Z", or `timezone`. To change a meeting, send again with the
+        same `uid` and a higher `sequence`; to call it off, add
+        `"method": "CANCEL"`.
+        """
         if isinstance(to, str):
             to = [to]
         body: dict[str, Any] = {"to": to}
+        prepared = self._c.attachments._prepare(attachments, images)
+        if prepared:
+            body["attachments"] = prepared
         if subject:
             body["subject"] = subject
         if text_body:
@@ -343,13 +399,27 @@ class _Messages:
             body["template_id"] = template_id
         if variables:
             body["variables"] = variables
+        if in_reply_to:
+            body["in_reply_to"] = in_reply_to
+        if references:
+            body["references"] = references
+        if calendar_invite:
+            body["calendar_invite"] = calendar_invite
         return SendResult.from_dict(
             self._c._request("POST", f"/v1/inboxes/{inbox_id}/messages", json=body, idempotency_key=idempotency_key)
         )
 
-    def list(self, inbox_id: str, *, q: str = "", direction: str = "", from_email: str = "", limit: int = 50, cursor: str = "") -> MessageList:
-        """List messages in an inbox, newest first. Supports search via `q`."""
+    def list(self, inbox_id: str, *, q: str = "", direction: str = "", from_email: str = "",
+             labels: list[str] | str | None = None, limit: int = 50, cursor: str = "") -> MessageList:
+        """List messages in an inbox, newest first. Supports search via `q`.
+
+        `labels` narrows to messages carrying every label given, so a sweep for
+        unanswered mail is one call:
+        `client.messages.list(inbox_id, labels=["state:unreplied"])`.
+        """
         params: dict[str, str] = {"limit": str(limit)}
+        if labels:
+            params["labels"] = labels if isinstance(labels, str) else ",".join(labels)
         if q:
             params["q"] = q
         if direction:
@@ -364,25 +434,64 @@ class _Messages:
         """Get a single message with full body and headers."""
         return MessageFull.from_dict(self._c._request("GET", f"/v1/inboxes/{inbox_id}/messages/{message_id}"))
 
-    def reply(self, inbox_id: str, message_id: str, text_body: str = "", html_body: str = "") -> SendResult:
-        """Reply to a message. Threading headers are set automatically."""
+    def _reply_body(self, text_body: str, html_body: str, to, cc, bcc,
+                    attachments, images, send_at=None, calendar_invite=None) -> dict[str, Any]:
         body: dict[str, Any] = {}
+        if calendar_invite:
+            body["calendar_invite"] = calendar_invite
+        if send_at:
+            body["send_at"] = send_at
         if text_body:
             body["text_body"] = text_body
         if html_body:
             body["html_body"] = html_body
+        if to:
+            body["to"] = [to] if isinstance(to, str) else list(to)
+        if cc:
+            body["cc"] = [cc] if isinstance(cc, str) else list(cc)
+        if bcc:
+            body["bcc"] = [bcc] if isinstance(bcc, str) else list(bcc)
+        prepared = self._c.attachments._prepare(attachments, images)
+        if prepared:
+            body["attachments"] = prepared
+        return body
+
+    def reply(self, inbox_id: str, message_id: str, text_body: str = "", html_body: str = "",
+              *, to: list[str] | str | None = None,
+              cc: list[str] | str | None = None,
+              bcc: list[str] | str | None = None,
+              send_at: str | None = None,
+              attachments: list[Any] | None = None,
+              images: list[Any] | None = None,
+              calendar_invite: dict[str, Any] | None = None) -> SendResult:
+        """Reply to a message. Threading headers are set automatically.
+
+        Recipients default to the other side of the conversation: the sender
+        for a message you received, and the original recipients for one you
+        sent, so nudging your own unanswered email reaches the right people
+        rather than looping back to you. `to` overrides that; `cc` and `bcc`
+        add addresses, which is how you keep a standing CC on every reply.
+        """
+        body = self._reply_body(text_body, html_body, to, cc, bcc, attachments, images,
+                                send_at, calendar_invite)
         return SendResult.from_dict(self._c._request("POST", f"/v1/inboxes/{inbox_id}/messages/{message_id}/reply", json=body))
 
-    def reply_all(self, inbox_id: str, message_id: str, text_body: str = "", html_body: str = "") -> SendResult:
-        """Reply-all to a message."""
-        body: dict[str, Any] = {}
-        if text_body:
-            body["text_body"] = text_body
-        if html_body:
-            body["html_body"] = html_body
+    def reply_all(self, inbox_id: str, message_id: str, text_body: str = "", html_body: str = "",
+                  *, to: list[str] | str | None = None,
+                  cc: list[str] | str | None = None,
+                  bcc: list[str] | str | None = None,
+                  send_at: str | None = None,
+                  attachments: list[Any] | None = None,
+                  images: list[Any] | None = None,
+                  calendar_invite: dict[str, Any] | None = None) -> SendResult:
+        """Reply-all to a message. `cc` adds to the original participants."""
+        body = self._reply_body(text_body, html_body, to, cc, bcc, attachments, images,
+                                send_at, calendar_invite)
         return SendResult.from_dict(self._c._request("POST", f"/v1/inboxes/{inbox_id}/messages/{message_id}/reply-all", json=body))
 
-    def forward(self, inbox_id: str, message_id: str, to: list[str] | str, text_body: str = "", html_body: str = "") -> SendResult:
+    def forward(self, inbox_id: str, message_id: str, to: list[str] | str, text_body: str = "",
+                html_body: str = "", *, attachments: list[Any] | None = None,
+                images: list[Any] | None = None) -> SendResult:
         """Forward a message to new recipients."""
         if isinstance(to, str):
             to = [to]
@@ -391,6 +500,9 @@ class _Messages:
             body["text_body"] = text_body
         if html_body:
             body["html_body"] = html_body
+        prepared = self._c.attachments._prepare(attachments, images)
+        if prepared:
+            body["attachments"] = prepared
         return SendResult.from_dict(self._c._request("POST", f"/v1/inboxes/{inbox_id}/messages/{message_id}/forward", json=body))
 
     def wait_for(
@@ -682,8 +794,101 @@ class _Usage:
         return Usage.from_dict(self._c._request("GET", "/v1/usage"))
 
 
+# ── Outbound attachment helpers ──────────────────────────────────────────────
+
+# Hosts that must never be fetched when resolving an image URL. The same code
+# runs inside the hosted MCP server, where the URL comes from whatever an agent
+# was told to send — so a URL fetch there is a request an attacker can aim at
+# our own network.
+_BLOCKED_URL_HOSTS = ("169.254.169.254", "metadata.google.internal", "localhost")
+
+MAX_FETCH_BYTES = 25 * 1024 * 1024
+
+
+def _is_url(value: str) -> bool:
+    return isinstance(value, str) and value.lower().startswith(("http://", "https://"))
+
+
+def _direct_download_url(url: str) -> str:
+    """Rewrite a Google Drive share link to its direct-download form.
+
+    A .../file/d/<id>/view link serves an HTML viewer page, so fetching it
+    verbatim attaches a web page named "view" instead of the photo.
+    """
+    import re
+
+    match = re.match(r"https?://drive\.google\.com/file/d/([^/]+)", url)
+    if match:
+        return f"https://drive.google.com/uc?export=download&id={match.group(1)}"
+    match = re.match(r"https?://drive\.google\.com/open\?id=([^&]+)", url)
+    if match:
+        return f"https://drive.google.com/uc?export=download&id={match.group(1)}"
+    return url
+
+
+def _fetch_url_bytes(url: str, *, expect_image: bool = False) -> tuple[bytes, str, str]:
+    """Download an image by URL. Returns (bytes, filename, content_type)."""
+    url = _direct_download_url(url)
+    import ipaddress
+    import socket
+    from urllib.parse import unquote, urlparse
+
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if not host or host in _BLOCKED_URL_HOSTS:
+        raise ValidationError(f"Refusing to fetch {url!r}")
+    try:
+        for info in socket.getaddrinfo(host, None):
+            ip = ipaddress.ip_address(info[4][0])
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+                raise ValidationError(
+                    f"Refusing to fetch {url!r}: it resolves to a private address."
+                )
+    except socket.gaierror:
+        raise ValidationError(f"Could not resolve the host in {url!r}") from None
+
+    with httpx.Client(timeout=30, follow_redirects=False) as fetch:
+        resp = fetch.get(url)
+        resp.raise_for_status()
+        data = resp.content
+    if len(data) > MAX_FETCH_BYTES:
+        raise ValidationError(f"{url} is larger than {MAX_FETCH_BYTES // (1024 * 1024)} MB")
+
+    filename = unquote(parsed.path.rsplit("/", 1)[-1]) or "image"
+    content_type = resp.headers.get("content-type", "").split(";")[0].strip()
+
+    # A share link that still returns HTML is a permissions page, not a file.
+    # Attaching it silently would send the recipient a login screen.
+    if expect_image and not content_type.startswith("image/"):
+        raise ValidationError(
+            f"{url} returned {content_type or 'no content type'} rather than an image. "
+            "If it is a Google Drive link, the file must be shared as 'anyone with the "
+            "link'; otherwise pass a direct image URL or a local path."
+        )
+    return data, filename, content_type or "application/octet-stream"
+
+
+def _read_source(source: Any, *, expect_image: bool = False) -> tuple[bytes, str, str]:
+    """Normalize a path, URL or raw bytes into (bytes, filename, content_type)."""
+    import mimetypes
+    from pathlib import Path
+
+    if isinstance(source, (bytes, bytearray)):
+        return bytes(source), "attachment", "application/octet-stream"
+    if _is_url(str(source)):
+        return _fetch_url_bytes(str(source), expect_image=expect_image)
+
+    path = Path(str(source)).expanduser()
+    if not path.is_file():
+        raise ValidationError(
+            f"{source!r} is not a readable file, and does not look like a URL."
+        )
+    guessed, _ = mimetypes.guess_type(path.name)
+    return path.read_bytes(), path.name, guessed or "application/octet-stream"
+
+
 class _Attachments:
-    """Attachment downloads."""
+    """Attachment uploads and downloads."""
 
     def __init__(self, client: DeadSimple):
         self._c = client
@@ -693,6 +898,49 @@ class _Attachments:
         return AttachmentUrl.from_dict(
             self._c._request("GET", f"/v1/inboxes/{inbox_id}/messages/{message_id}/attachments/{attachment_id}")
         )
+
+    def upload(self, source: Any, *, filename: str | None = None,
+               content_type: str | None = None, inline: bool = False) -> dict[str, Any]:
+        """Upload a file, URL or bytes and return an attachment reference.
+
+        The bytes go straight to storage rather than through the send request,
+        which is what makes real photos possible: a send call cannot carry more
+        than a few MB. The returned reference can be attached to as many
+        messages as you like without re-uploading.
+
+        Pass `inline=True` for an image that should render in the body.
+        """
+        data, guessed_name, guessed_type = _read_source(source, expect_image=inline)
+        name = filename or guessed_name
+        ctype = content_type or guessed_type
+
+        staged = self._c._request("POST", "/v1/attachments",
+                                  json={"filename": name, "content_type": ctype,
+                                        "size": len(data)})
+        with httpx.Client(timeout=120) as put:
+            resp = put.put(staged["upload_url"], content=data,
+                           headers={"Content-Type": ctype})
+            resp.raise_for_status()
+
+        ref: dict[str, Any] = {"attachment_id": staged["attachment_id"]}
+        if inline:
+            ref["inline"] = True
+        return ref
+
+    def _prepare(self, attachments: list[Any] | None,
+                 images: list[Any] | None = None) -> list[dict[str, Any]]:
+        """Normalize send()'s attachments/images into API attachment entries."""
+        prepared: list[dict[str, Any]] = []
+        for source, inline in [(a, False) for a in (attachments or [])] + \
+                              [(i, True) for i in (images or [])]:
+            if isinstance(source, dict):
+                entry = dict(source)
+                if inline:
+                    entry["inline"] = True
+                prepared.append(entry)
+            else:
+                prepared.append(self.upload(source, inline=inline))
+        return prepared
 
 
 class _Filters:
@@ -749,6 +997,113 @@ class _Templates:
     def delete(self, template_id: str) -> None:
         """Delete a template."""
         self._c._request("DELETE", f"/v1/templates/{template_id}")
+
+class _Identity:
+    """Sign in with Dead Simple — the OIDC provider at https://id.deadsimple.email.
+
+    An agent's inbox is its login. Any app that accepts a generic OpenID
+    Connect provider can let the agent sign up and sign in; the app receives a
+    stable ``sub`` (the inbox_id), the inbox address, and, for registered
+    clients, the verified human owner behind the agent.
+    """
+
+    ISSUER = "https://id.deadsimple.email"
+
+    def __init__(self, client: DeadSimple):
+        self._c = client
+
+    def sign_in(self, inbox_id: str, authorization_url: str, *, follow: bool = True) -> dict[str, Any]:
+        """Sign in to an app with this inbox.
+
+        ``authorization_url`` is the URL the app would send a browser to
+        (``https://id.deadsimple.email/authorize?...``). Returns the redirect
+        the app expects; with ``follow=True`` the redirect is fetched so the
+        app completes the login, and ``final_url`` / ``final_status`` report
+        where that landed.
+        """
+        out = self._c._request(
+            "POST", f"/v1/inboxes/{inbox_id}/identity/sign-in", json={"authorization_url": authorization_url}
+        )
+        if follow:
+            resp = httpx.get(out["redirect_to"], follow_redirects=True, timeout=30.0)
+            out["final_url"] = str(resp.url)
+            out["final_status"] = resp.status_code
+        return out
+
+    def enroll_key(self, inbox_id: str, *, public_key: dict[str, Any] | str, name: str = "") -> dict[str, Any]:
+        """Enroll a P-256 public key (JWK dict or PEM) so the agent can sign in with a signed assertion."""
+        body: dict[str, Any] = {"public_key": public_key}
+        if name:
+            body["name"] = name
+        return self._c._request("POST", f"/v1/inboxes/{inbox_id}/identity/keys", json=body)
+
+    def list_keys(self, inbox_id: str) -> dict[str, Any]:
+        return self._c._request("GET", f"/v1/inboxes/{inbox_id}/identity/keys")
+
+    def delete_key(self, inbox_id: str, kid: str) -> None:
+        self._c._request("DELETE", f"/v1/inboxes/{inbox_id}/identity/keys/{kid}")
+
+    def connections(self, inbox_id: str) -> dict[str, Any]:
+        """Apps this inbox has signed in to."""
+        return self._c._request("GET", f"/v1/inboxes/{inbox_id}/identity/connections")
+
+    def register_client(
+        self,
+        client_name: str,
+        redirect_uris: list[str],
+        *,
+        client_uri: str = "",
+        logo_uri: str = "",
+        scope: str = "openid email profile owner_email org offline_access",
+        token_endpoint_auth_method: str = "client_secret_basic",
+    ) -> dict[str, Any]:
+        """Register your app as a relying party. The client_secret is returned once."""
+        body: dict[str, Any] = {
+            "client_name": client_name,
+            "redirect_uris": redirect_uris,
+            "scope": scope,
+            "token_endpoint_auth_method": token_endpoint_auth_method,
+        }
+        if client_uri:
+            body["client_uri"] = client_uri
+        if logo_uri:
+            body["logo_uri"] = logo_uri
+        return self._c._request("POST", "/v1/identity/clients", json=body)
+
+    def list_clients(self) -> dict[str, Any]:
+        return self._c._request("GET", "/v1/identity/clients")
+
+    def delete_client(self, client_id: str) -> None:
+        self._c._request("DELETE", f"/v1/identity/clients/{client_id}")
+
+    @staticmethod
+    def make_assertion(inbox_id: str, private_key_pem: str, kid: str, *, client_id: str = "",
+                       code_challenge: str = "", nonce: str = "", ttl: int = 120) -> str:
+        """Build the ES256 assertion for the key-based sign-in path.
+
+        Requires ``pyjwt[crypto]``. Optional bindings (client_id, code_challenge,
+        nonce) are checked against the authorization request when present.
+        """
+        import time as _time
+        import uuid as _uuid
+
+        try:
+            import jwt as _jwt
+        except ImportError as exc:  # pragma: no cover
+            raise RuntimeError("pip install 'pyjwt[crypto]' to build assertions") from exc
+        now = int(_time.time())
+        claims: dict[str, Any] = {
+            "iss": inbox_id, "sub": inbox_id, "aud": _Identity.ISSUER,
+            "iat": now, "exp": now + min(ttl, 600), "jti": str(_uuid.uuid4()),
+        }
+        if client_id:
+            claims["client_id"] = client_id
+        if code_challenge:
+            claims["code_challenge"] = code_challenge
+        if nonce:
+            claims["nonce"] = nonce
+        return _jwt.encode(claims, private_key_pem, algorithm="ES256", headers={"kid": kid})
+
 
 
 # ── Async resource classes ────────────────────────────────────────────────────
@@ -1105,6 +1460,59 @@ class _AsyncTemplates:
 
     async def delete(self, template_id: str) -> None:
         await self._c._request("DELETE", f"/v1/templates/{template_id}")
+
+class _AsyncIdentity:
+    """Async version of :class:`_Identity`."""
+
+    ISSUER = _Identity.ISSUER
+    make_assertion = staticmethod(_Identity.make_assertion)
+
+    def __init__(self, client: AsyncDeadSimple):
+        self._c = client
+
+    async def sign_in(self, inbox_id: str, authorization_url: str, *, follow: bool = True) -> dict[str, Any]:
+        out = await self._c._request(
+            "POST", f"/v1/inboxes/{inbox_id}/identity/sign-in", json={"authorization_url": authorization_url}
+        )
+        if follow:
+            async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as h:
+                resp = await h.get(out["redirect_to"])
+            out["final_url"] = str(resp.url)
+            out["final_status"] = resp.status_code
+        return out
+
+    async def enroll_key(self, inbox_id: str, *, public_key: dict[str, Any] | str, name: str = "") -> dict[str, Any]:
+        body: dict[str, Any] = {"public_key": public_key}
+        if name:
+            body["name"] = name
+        return await self._c._request("POST", f"/v1/inboxes/{inbox_id}/identity/keys", json=body)
+
+    async def list_keys(self, inbox_id: str) -> dict[str, Any]:
+        return await self._c._request("GET", f"/v1/inboxes/{inbox_id}/identity/keys")
+
+    async def delete_key(self, inbox_id: str, kid: str) -> None:
+        await self._c._request("DELETE", f"/v1/inboxes/{inbox_id}/identity/keys/{kid}")
+
+    async def connections(self, inbox_id: str) -> dict[str, Any]:
+        return await self._c._request("GET", f"/v1/inboxes/{inbox_id}/identity/connections")
+
+    async def register_client(self, client_name: str, redirect_uris: list[str], *, client_uri: str = "",
+                              logo_uri: str = "", scope: str = "openid email profile owner_email org offline_access",
+                              token_endpoint_auth_method: str = "client_secret_basic") -> dict[str, Any]:
+        body: dict[str, Any] = {"client_name": client_name, "redirect_uris": redirect_uris, "scope": scope,
+                                "token_endpoint_auth_method": token_endpoint_auth_method}
+        if client_uri:
+            body["client_uri"] = client_uri
+        if logo_uri:
+            body["logo_uri"] = logo_uri
+        return await self._c._request("POST", "/v1/identity/clients", json=body)
+
+    async def list_clients(self) -> dict[str, Any]:
+        return await self._c._request("GET", "/v1/identity/clients")
+
+    async def delete_client(self, client_id: str) -> None:
+        await self._c._request("DELETE", f"/v1/identity/clients/{client_id}")
+
 
 
 # ── WebSocket streaming ──────────────────────────────────────────────────────

@@ -72,6 +72,24 @@ def _client_for(api_key: str) -> DeadSimple:
     return DeadSimple(api_key)
 
 
+def _as_list(value: list[str] | str | None) -> list[str] | None:
+    """Normalize a file list. Accepts a list (preferred) or a comma string.
+
+    Models occasionally flatten a list argument into a string; accepting both
+    costs nothing and avoids a confusing failure.
+    """
+    if not value:
+        return None
+    if isinstance(value, str):
+        return [v.strip() for v in value.split(",") if v.strip()] or None
+    return [str(v).strip() for v in value if str(v).strip()] or None
+
+
+def _as_recipients(value: str | list[str] | None) -> list[str] | None:
+    """Normalize an address field. Same shapes as _as_list, named for clarity."""
+    return _as_list(value)
+
+
 def _get_client() -> DeadSimple:
     """Resolve the caller's client.
 
@@ -189,8 +207,11 @@ def delete_inbox(inbox_id: str) -> str:
         openWorldHint=True,
     ),
 )
-def send_email(inbox_id: str, to: str, subject: str, body: str, cc: str = "", bcc: str = "") -> str:
-    """Send an email from an inbox.
+def send_email(inbox_id: str, to: str, subject: str, body: str, cc: str = "",
+               bcc: str = "", images: list[str] | None = None,
+               attachments: list[str] | None = None,
+               in_reply_to: str = "", send_at: str = "") -> str:
+    """Send an email from an inbox, optionally with images or files.
 
     Args:
         inbox_id: The inbox to send from
@@ -199,11 +220,26 @@ def send_email(inbox_id: str, to: str, subject: str, body: str, cc: str = "", bc
         body: Email body (plain text)
         cc: CC recipients (comma-separated, optional)
         bcc: BCC recipients (comma-separated, optional)
+        images: Photos to show IN the email body, as a list of absolute local
+            file paths or https URLs. Use this for pictures the reader should
+            just see, e.g. photos of work to be quoted.
+        attachments: Files to attach as downloads, as a list of paths or https
+            URLs. Use this for documents like PDFs. To invite someone to a
+            meeting, do NOT attach an .ics here: it arrives as a file nobody
+            can accept. Use send_calendar_invite instead.
+        in_reply_to: message_id of the message this continues. Threads the send
+            onto that conversation instead of starting a new one. Prefer
+            reply_to_message unless you need to set the recipients yourself.
+        send_at: ISO 8601 timestamp to send at instead of now, e.g.
+            "2026-09-08T14:00:00Z". Use it to schedule your own follow-up at
+            the moment you send, rather than needing something to wake you up.
     """
     client = _get_client()
     to_list = [t.strip() for t in to.split(",") if t.strip()]
     cc_list = [c.strip() for c in cc.split(",") if c.strip()] if cc else None
     bcc_list = [b.strip() for b in bcc.split(",") if b.strip()] if bcc else None
+    image_list = _as_list(images)
+    file_list = _as_list(attachments)
     result = client.messages.send(
         inbox_id=inbox_id,
         to=to_list,
@@ -211,8 +247,169 @@ def send_email(inbox_id: str, to: str, subject: str, body: str, cc: str = "", bc
         text_body=body,
         cc=cc_list,
         bcc=bcc_list,
+        images=image_list,
+        attachments=file_list,
+        in_reply_to=in_reply_to or None,
+        send_at=send_at or None,
     )
     return json.dumps({"message_id": result.message_id, "status": result.status}, indent=2)
+
+
+@mcp.tool(
+    title="Send Calendar Invite",
+    annotations=ToolAnnotations(
+        title="Send Calendar Invite",
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=False,
+        openWorldHint=True,
+    ),
+)
+def send_calendar_invite(inbox_id: str, to: str, title: str, start: str,
+                         end: str = "", duration_minutes: int = 30,
+                         timezone: str = "", location: str = "",
+                         description: str = "", subject: str = "", body: str = "",
+                         cc: str = "", bcc: str = "", reminder_minutes: int = 0,
+                         all_day: bool = False, recurrence: str = "",
+                         uid: str = "", sequence: int = 0,
+                         in_reply_to: str = "") -> str:
+    """Send a real calendar invitation: Accept/Decline in the recipient's mail
+    client, and the event on their calendar.
+
+    Use this rather than attaching an .ics file. An attached .ics is only a file
+    the recipient has to open by hand; it does not create the invitation, and an
+    agent on the other end has to guess what the attachment is. This puts the
+    event in the message itself, where mail clients and other agents look.
+
+    Returns the invite's uid. Keep it: changing or cancelling the meeting needs it.
+
+    Args:
+        inbox_id: The inbox to send from
+        to: Attendee email addresses (comma-separated for multiple). These
+            become the event's attendees.
+        title: The event title, as it appears on the calendar
+        start: When it starts, ISO 8601. Include a zone: "2026-09-15T15:00:00Z",
+            "2026-09-15T15:00:00-04:00", or a local time plus `timezone`.
+            A date alone ("2026-09-15") makes it an all-day event.
+        end: When it ends, ISO 8601. Optional; defaults to duration_minutes.
+        duration_minutes: Length when `end` is not given. Default 30.
+        timezone: IANA zone for a local `start`/`end` carrying no offset, e.g.
+            "America/New_York". Required for a naive time, since otherwise the
+            meeting would land at the wrong hour.
+        location: Where it happens: an address, a room, or a meeting link.
+        description: Longer detail shown on the calendar entry itself.
+        subject: Subject of the covering email. Defaults to the event title.
+        body: Text of the covering email. Defaults to a line naming the event.
+        cc: CC recipients (comma-separated). Also invited.
+        bcc: BCC recipients (comma-separated). Not invited.
+        reminder_minutes: Alarm this many minutes before. 0 for none.
+        all_day: Treat as an all-day event rather than a timed one.
+        recurrence: An RFC 5545 rule for a repeating event, e.g.
+            "FREQ=WEEKLY;COUNT=4" or "FREQ=MONTHLY;BYMONTHDAY=1".
+        uid: To RESCHEDULE an event already sent, pass its uid and raise
+            `sequence`. Leave empty for a new invitation.
+        sequence: Revision number. Raise it above the last one sent whenever you
+            change an existing event, or clients ignore the update.
+        in_reply_to: message_id this invitation answers, to keep it in the
+            thread where the time was agreed.
+    """
+    client = _get_client()
+    to_list = [t.strip() for t in to.split(",") if t.strip()]
+    cc_list = [c.strip() for c in cc.split(",") if c.strip()] if cc else None
+    bcc_list = [b.strip() for b in bcc.split(",") if b.strip()] if bcc else None
+
+    invite: dict = {"title": title, "start": start, "sequence": sequence}
+    if end:
+        invite["end"] = end
+    else:
+        invite["duration_minutes"] = duration_minutes
+    if timezone:
+        invite["timezone"] = timezone
+    if location:
+        invite["location"] = location
+    if description:
+        invite["description"] = description
+    if reminder_minutes:
+        invite["reminder_minutes"] = reminder_minutes
+    if all_day:
+        invite["all_day"] = True
+    if recurrence:
+        invite["recurrence"] = recurrence
+    if uid:
+        invite["uid"] = uid
+
+    default_body = f"You're invited: {title}\n\nWhen: {start}"
+    if location:
+        default_body += f"\nWhere: {location}"
+
+    result = client.messages.send(
+        inbox_id=inbox_id,
+        to=to_list,
+        subject=subject or title,
+        text_body=body or default_body,
+        cc=cc_list,
+        bcc=bcc_list,
+        in_reply_to=in_reply_to or None,
+        calendar_invite=invite,
+    )
+    return json.dumps({
+        "message_id": result.message_id,
+        "status": result.status,
+        "calendar_uid": result.calendar_uid,
+        "note": "Keep calendar_uid to reschedule or cancel this event.",
+    }, indent=2)
+
+
+@mcp.tool(
+    title="Cancel Calendar Invite",
+    annotations=ToolAnnotations(
+        title="Cancel Calendar Invite",
+        readOnlyHint=False,
+        destructiveHint=True,
+        idempotentHint=False,
+        openWorldHint=True,
+    ),
+)
+def cancel_calendar_invite(inbox_id: str, to: str, uid: str, title: str,
+                           start: str, sequence: int = 1, timezone: str = "",
+                           subject: str = "", body: str = "", cc: str = "") -> str:
+    """Cancel an invitation you sent, taking it off the attendees' calendars.
+
+    The cancellation is matched to the original event by `uid`, which
+    send_calendar_invite returned. With the wrong uid the recipient's calendar
+    has nothing to match and the event stays on it.
+
+    Args:
+        inbox_id: The inbox that sent the original invitation
+        to: The attendees to notify (comma-separated), as originally invited
+        uid: The calendar_uid returned when the invitation was sent
+        title: The event title, as originally sent
+        start: The event's original start time, ISO 8601
+        sequence: Must be higher than the last sent for this event. Default 1.
+        timezone: IANA zone, if `start` is a local time with no offset
+        subject: Subject of the covering email. Defaults to "Cancelled: <title>".
+        body: Text of the covering email.
+        cc: CC recipients (comma-separated)
+    """
+    client = _get_client()
+    to_list = [t.strip() for t in to.split(",") if t.strip()]
+    cc_list = [c.strip() for c in cc.split(",") if c.strip()] if cc else None
+
+    invite: dict = {"method": "CANCEL", "uid": uid, "title": title,
+                    "start": start, "sequence": sequence}
+    if timezone:
+        invite["timezone"] = timezone
+
+    result = client.messages.send(
+        inbox_id=inbox_id,
+        to=to_list,
+        subject=subject or f"Cancelled: {title}",
+        text_body=body or f"{title} has been cancelled.",
+        cc=cc_list,
+        calendar_invite=invite,
+    )
+    return json.dumps({"message_id": result.message_id, "status": result.status,
+                       "cancelled_uid": uid}, indent=2)
 
 
 @mcp.tool(
@@ -225,21 +422,31 @@ def send_email(inbox_id: str, to: str, subject: str, body: str, cc: str = "", bc
         openWorldHint=True,
     ),
 )
-def read_messages(inbox_id: str, limit: int = 10) -> str:
+def read_messages(inbox_id: str, limit: int = 10, labels: str = "",
+                  direction: str = "") -> str:
     """Read recent messages in an inbox.
 
     Args:
         inbox_id: The inbox to read from
         limit: Maximum number of messages to return (default 10)
+        labels: Only messages carrying every one of these labels
+            (comma-separated), e.g. "state:unreplied" to sweep for mail nobody
+            has answered yet.
+        direction: "inbound" or "outbound" to see only received or only sent.
     """
     client = _get_client()
-    result = client.messages.list(inbox_id, limit=limit)
+    result = client.messages.list(
+        inbox_id, limit=limit,
+        labels=[x.strip() for x in labels.split(",") if x.strip()] or None,
+        direction=direction,
+    )
     return json.dumps([{
         "message_id": m.message_id,
         "direction": m.direction,
         "from": m.from_email,
         "to": m.to,
         "subject": m.subject,
+        "labels": list(getattr(m, "labels", []) or []),
         "snippet": m.snippet,
         "date": m.created_at or m.received_at,
     } for m in result.messages], indent=2)
@@ -288,16 +495,42 @@ def read_message(inbox_id: str, message_id: str) -> str:
         openWorldHint=True,
     ),
 )
-def reply_to_message(inbox_id: str, message_id: str, body: str) -> str:
+def reply_to_message(inbox_id: str, message_id: str, body: str,
+                     cc: str = "", bcc: str = "", to: str = "",
+                     reply_all: bool = False, send_at: str = "",
+                     images: list[str] | None = None,
+                     attachments: list[str] | None = None) -> str:
     """Reply to a message. Threading headers are set automatically.
+
+    Works on messages you sent as well as ones you received. Replying to your
+    own message goes to the people it was addressed to, which is what a "sent
+    this days ago, no answer, nudge them" follow-up needs.
 
     Args:
         inbox_id: The inbox containing the message
         message_id: The message ID to reply to
         body: Reply body (plain text)
+        cc: CC recipients (comma-separated, optional). Use this for a standing
+            CC that should be on every reply.
+        bcc: BCC recipients (comma-separated, optional)
+        to: Override the recipients (comma-separated). Defaults to the other
+            side of the conversation, so usually leave it empty.
+        reply_all: Include everyone on the original To and Cc lines.
+        send_at: ISO 8601 timestamp to send the reply at instead of now, e.g.
+            "2026-09-08T14:00:00Z". Schedules a nudge at the moment you reply.
+        images: Photos to show IN the reply body, as a list of absolute local
+            file paths or https URLs.
+        attachments: Files to attach as downloads, as a list of paths or URLs.
     """
     client = _get_client()
-    result = client.messages.reply(inbox_id, message_id, text_body=body)
+    send = client.messages.reply_all if reply_all else client.messages.reply
+    result = send(inbox_id, message_id, text_body=body,
+                  to=_as_recipients(to),
+                  cc=_as_recipients(cc),
+                  bcc=_as_recipients(bcc),
+                  send_at=send_at or None,
+                  images=_as_list(images),
+                  attachments=_as_list(attachments))
     return json.dumps({"message_id": result.message_id, "status": result.status}, indent=2)
 
 
@@ -311,7 +544,9 @@ def reply_to_message(inbox_id: str, message_id: str, body: str) -> str:
         openWorldHint=True,
     ),
 )
-def forward_message(inbox_id: str, message_id: str, to: str, body: str = "") -> str:
+def forward_message(inbox_id: str, message_id: str, to: str, body: str = "",
+                    images: list[str] | None = None,
+                    attachments: list[str] | None = None) -> str:
     """Forward a message to new recipients.
 
     Args:
@@ -319,10 +554,14 @@ def forward_message(inbox_id: str, message_id: str, to: str, body: str = "") -> 
         message_id: The message ID to forward
         to: Recipient email address (comma-separated for multiple)
         body: Optional additional text to include
+        images: Photos to show IN the body, as a list of paths or https URLs.
+        attachments: Files to attach as downloads, as a list of paths or URLs.
     """
     client = _get_client()
     to_list = [t.strip() for t in to.split(",") if t.strip()]
-    result = client.messages.forward(inbox_id, message_id, to=to_list, text_body=body)
+    result = client.messages.forward(inbox_id, message_id, to=to_list, text_body=body,
+                                     images=_as_list(images),
+                                     attachments=_as_list(attachments))
     return json.dumps({"message_id": result.message_id, "status": result.status}, indent=2)
 
 
@@ -531,6 +770,33 @@ def get_usage() -> str:
         "webhooks": usage.webhooks,
         "custom_domains": usage.custom_domains,
     }, indent=2)
+
+
+@mcp.tool(
+    title="Sign In With Inbox",
+    annotations=ToolAnnotations(
+        title="Sign In With Inbox",
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=False,
+        openWorldHint=True,
+    ),
+)
+def sign_in_with_inbox(inbox_id: str, authorization_url: str, follow: bool = True) -> str:
+    """Sign in to a third-party app using this inbox as the agent's identity
+    (Sign in with Dead Simple, an OpenID Connect provider at
+    https://id.deadsimple.email).
+
+    Use when an app offers "Sign in with Dead Simple" or any OIDC login whose
+    authorization URL starts with https://id.deadsimple.email/authorize. Pass
+    that URL exactly as the app produced it. The app receives the inbox's
+    address as the account email, so verification emails land in this inbox.
+    With follow=true the redirect back to the app is fetched so the login
+    completes; final_url and final_status show where it landed.
+    """
+    client = _get_client()
+    result = client.identity.sign_in(inbox_id, authorization_url, follow=follow)
+    return json.dumps(result, indent=2)
 
 
 # ── Remote transport ──────────────────────────────────────────────────────────

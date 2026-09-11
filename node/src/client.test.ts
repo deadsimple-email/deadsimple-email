@@ -483,3 +483,53 @@ describe("outbound attachments", () => {
     expect(body).not.toHaveProperty("attachments");
   });
 });
+
+// ── Calendar invites ─────────────────────────────────────────────────────────
+// An attached .ics is a file, not an invitation. These cover the option
+// reaching the API and the uid coming back, which a later reschedule or
+// cancellation is matched on.
+
+describe("calendar invites", () => {
+  it("passes the invite through and returns the uid", async () => {
+    mockFetch.mockResolvedValueOnce(mockResponse(201, wrap({
+      message_id: "m4", status: "sent", calendar_uid: "u1@deadsimple.email",
+    })));
+
+    const client = new DeadSimple(API_KEY);
+    const result = await client.messages.send({
+      inboxId: "inb_1", to: "t@x.com", subject: "Roof inspection",
+      textBody: "Tuesday at 3.",
+      calendarInvite: {
+        title: "Roof inspection", start: "2026-09-15T15:00:00Z", duration_minutes: 45,
+      },
+    });
+
+    const body = JSON.parse((mockFetch.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.calendar_invite.title).toBe("Roof inspection");
+    expect(body.calendar_invite.start).toBe("2026-09-15T15:00:00Z");
+    expect(result.calendar_uid).toBe("u1@deadsimple.email");
+  });
+
+  it("sends no calendar key when none is given", async () => {
+    mockFetch.mockResolvedValueOnce(mockResponse(201, wrap({
+      message_id: "m5", status: "sent",
+    })));
+    await new DeadSimple(API_KEY).messages.send({
+      inboxId: "inb_1", to: "a@b.com", subject: "s", textBody: "t",
+    });
+    const body = JSON.parse((mockFetch.mock.calls[0][1] as RequestInit).body as string);
+    expect(body).not.toHaveProperty("calendar_invite");
+  });
+
+  it("carries an invite on a reply", async () => {
+    mockFetch.mockResolvedValueOnce(mockResponse(201, wrap({
+      message_id: "m6", status: "sent", calendar_uid: "u2@deadsimple.email",
+    })));
+    await new DeadSimple(API_KEY).messages.reply("inb_1", "m1", {
+      textBody: "Tuesday works.",
+      calendarInvite: { title: "Site visit", start: "2026-09-15T15:00:00Z" },
+    });
+    const body = JSON.parse((mockFetch.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.calendar_invite.title).toBe("Site visit");
+  });
+});

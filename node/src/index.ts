@@ -10,10 +10,15 @@ export {
 } from "./errors.js";
 
 export type {
+  IdentitySignInResult,
+  IdentityKey,
+  IdentityConnection,
+  IdentityClient,
   Inbox,
   InboxList,
   BulkCreateResult,
   BulkDeleteResult,
+  CalendarInvite,
   Attachment,
   Draft,
   DraftList,

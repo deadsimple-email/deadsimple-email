@@ -107,6 +107,50 @@ export interface MessageList {
 export interface SendResult {
   message_id: string;
   status: string;
+  /**
+   * Present only on a calendar invite. Rescheduling or cancelling the event is
+   * matched to the original by UID, so an agent that does not keep this cannot
+   * change the meeting it just booked.
+   */
+  calendar_uid?: string;
+}
+
+/**
+ * A calendar invitation carried in the message body, which is what produces
+ * Accept/Decline and puts the event on the recipient's calendar. Attaching an
+ * .ics file does not: it arrives as a download nobody can act on.
+ */
+export interface CalendarInvite {
+  /** Event title, as it appears on the calendar. */
+  title: string;
+  /**
+   * ISO 8601 start. Needs a zone: a trailing "Z", an offset, or `timezone`.
+   * A bare date ("2026-09-15") makes it an all-day event.
+   */
+  start: string;
+  /** ISO 8601 end. Omit to use `durationMinutes`. */
+  end?: string;
+  /** Length when `end` is absent. Defaults to 30. */
+  duration_minutes?: number;
+  /** IANA zone for a local time with no offset, e.g. "America/New_York". */
+  timezone?: string;
+  location?: string;
+  description?: string;
+  /** Defaults to the message's own `to` + `cc`. */
+  attendees?: (string | { email: string; name?: string; optional?: boolean })[];
+  /** Minutes before the event to alarm. */
+  reminder_minutes?: number;
+  all_day?: boolean;
+  /** RFC 5545 rule for a repeating event, e.g. "FREQ=WEEKLY;COUNT=4". */
+  recurrence?: string;
+  /** Pass the uid of an event already sent to reschedule or cancel it. */
+  uid?: string;
+  /** Raise above the last sent whenever an existing event changes. */
+  sequence?: number;
+  /** "REQUEST" (default), "CANCEL" to withdraw, or "PUBLISH" for no RSVP. */
+  method?: "REQUEST" | "CANCEL" | "PUBLISH";
+  /** Your own iCalendar object, instead of the fields above. */
+  ics?: string;
 }
 
 export interface Thread {
@@ -252,4 +296,54 @@ export interface AttachmentUrl {
   size: number;
   url: string;
   expires_in: number;
+}
+
+
+// ── Sign in with Dead Simple (id.deadsimple.email) ───────────────────────────
+
+export interface IdentitySignInResult {
+  redirect_to: string;
+  client_id: string;
+  client_name: string;
+  scope: string;
+  expires_in: number;
+  next_step: string;
+  final_url?: string;
+  final_status?: number;
+}
+
+export interface IdentityKey {
+  kid: string;
+  inbox_id: string;
+  email: string;
+  name: string;
+  jwk: { kty: string; crv: string; x: string; y: string; kid: string };
+  created_at: string;
+  last_used_at: string | null;
+}
+
+export interface IdentityConnection {
+  client_id: string;
+  client_name: string;
+  client_uri: string;
+  scope: string;
+  first_sign_in_at: string;
+  last_sign_in_at: string;
+  sign_in_count: number;
+}
+
+export interface IdentityClient {
+  client_id: string;
+  client_name: string;
+  client_uri: string;
+  logo_uri: string;
+  redirect_uris: string[];
+  token_endpoint_auth_method: string;
+  scope: string;
+  grant_types: string[];
+  response_types: string[];
+  created_at: string;
+  issuer?: string;
+  discovery_url?: string;
+  warning?: string;
 }

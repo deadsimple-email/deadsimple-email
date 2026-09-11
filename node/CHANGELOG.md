@@ -1,5 +1,49 @@
 # Changelog
 
+## 1.5.0
+
+### Added
+- `client.identity`: Sign in with Dead Simple, the OpenID Connect provider at
+  `https://id.deadsimple.email` where an agent's inbox is its login.
+  `identity.signIn(inboxId, authorizationUrl)` completes an app's OIDC login
+  with one call; `enrollKey`, `listKeys`, `deleteKey` manage P-256 keys for
+  the signed-assertion path; `connections` lists the apps an inbox has signed
+  in to; `registerClient`, `listClients`, `deleteClient` manage your own
+  relying-party registrations. Types `IdentitySignInResult`, `IdentityKey`,
+  `IdentityConnection`, `IdentityClient` are exported.
+
+## 1.3.0
+
+### Added
+- `reply()` and `replyAll()` take `sendAt` to schedule a reply.
+- `messages.list()` takes `labels`, narrowing to messages carrying every label
+  given.
+
+## 1.2.0
+
+### Added
+- `reply()` and `replyAll()` take `cc`, `bcc` and `to`, so a standing CC can
+  ride every reply:
+
+  ```ts
+  await client.messages.reply(inboxId, messageId, {
+    textBody: "Following up.",
+    cc: ["records@client.example"],
+  });
+  ```
+
+  On `replyAll()`, `cc` adds to the original participants rather than
+  replacing them.
+- `send()` takes `inReplyTo` (and `references`), accepting either a `messageId`
+  from the inbox or a raw Message-ID header.
+
+### Fixed
+- Replying to a message you sent now goes to the people it was addressed to,
+  rather than to its From, which is your own inbox.
+- Threading matches both the Message-ID column we write on outbound mail and
+  the one we write on inbound, then the References chain, so replies join the
+  conversation they belong to instead of each opening a new thread.
+
 ## 1.1.0
 
 ### Added

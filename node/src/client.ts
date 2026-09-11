@@ -29,6 +29,7 @@ import type {
   AttachmentUrl,
   BulkCreateResult,
   BulkDeleteResult,
+  CalendarInvite,
   Domain,
   DomainList,
   DomainVerification,
@@ -46,10 +47,14 @@ import type {
   WebhookList,
   Workspace,
   WorkspaceList,
+  IdentitySignInResult,
+  IdentityKey,
+  IdentityConnection,
+  IdentityClient,
 } from "./types.js";
 
 const DEFAULT_BASE_URL = "https://api.deadsimple.email";
-const VERSION = "1.1.0";
+const VERSION = "1.5.0";
 
 export interface DeadSimpleOptions {
   baseUrl?: string;
@@ -113,6 +118,7 @@ export class DeadSimple {
   readonly attachments: Attachments;
   readonly filters: Filters;
   readonly templates: Templates;
+  readonly identity: Identity;
 
   constructor(apiKey: string, options?: DeadSimpleOptions) {
     if (!apiKey) {
@@ -136,6 +142,7 @@ export class DeadSimple {
     this.attachments = new Attachments(this);
     this.filters = new Filters(this);
     this.templates = new Templates(this);
+    this.identity = new Identity(this);
   }
 
   /** @internal */
@@ -268,6 +275,27 @@ class Inboxes {
   }
 }
 
+/**
+ * Recipients default to the other side of the conversation: the sender of a
+ * message you received, or the original recipients of one you sent, so a
+ * follow-up on your own unanswered email reaches the right people instead of
+ * looping back to you. `to` overrides that; `cc`/`bcc` add addresses, which is
+ * how you keep a standing CC on every reply.
+ */
+export interface ReplyOptions {
+  textBody?: string;
+  htmlBody?: string;
+  to?: string | string[];
+  cc?: string | string[];
+  bcc?: string | string[];
+  /** ISO 8601 timestamp to send at instead of now, scheduling a follow-up. */
+  sendAt?: string;
+  images?: AttachmentSource[];
+  attachments?: AttachmentSource[];
+  /** Turns the reply into a calendar invitation. See `send`. */
+  calendarInvite?: CalendarInvite;
+}
+
 class Messages {
   constructor(private client: DeadSimple) {}
 
@@ -286,6 +314,33 @@ class Messages {
     images?: AttachmentSource[];
     /** Files to attach as downloads. Same accepted forms as `images`. */
     attachments?: AttachmentSource[];
+    /**
+     * Thread this send onto an existing conversation. Takes a `messageId`
+     * from this inbox or a raw Message-ID header. Use it when a reply also
+     * needs its own recipient list; otherwise `reply()` is simpler.
+     */
+    inReplyTo?: string;
+    references?: string[];
+    /**
+     * Makes the message a real invitation: Accept/Decline in the recipient's
+     * mail client, and the event on their calendar. Attaching an .ics file
+     * does not do this; the event has to ride in the body.
+     *
+     * ```ts
+     * const r = await client.messages.send({
+     *   inboxId, to: "tommy@example.com", subject: "Roof inspection Tuesday",
+     *   textBody: "Proposing Tuesday at 3.",
+     *   calendarInvite: {
+     *     title: "Roof inspection - 124 Lakeshore Dr",
+     *     start: "2026-09-15T15:00:00",
+     *     timezone: "America/New_York",
+     *     duration_minutes: 45,
+     *   },
+     * });
+     * r.calendar_uid; // keep this to reschedule or cancel later
+     * ```
+     */
+    calendarInvite?: CalendarInvite;
     idempotencyKey?: string;
   }): Promise<SendResult> {
     const body: Record<string, unknown> = {
@@ -303,6 +358,9 @@ class Messages {
     if (opts.bcc) body.bcc = opts.bcc;
     if (opts.replyTo) body.reply_to = opts.replyTo;
     if (opts.headers) body.headers = opts.headers;
+    if (opts.inReplyTo) body.in_reply_to = opts.inReplyTo;
+    if (opts.references) body.references = opts.references;
+    if (opts.calendarInvite) body.calendar_invite = opts.calendarInvite;
     return this.client._request(
       "POST",
       `/v1/inboxes/${opts.inboxId}/messages`,
@@ -317,6 +375,8 @@ class Messages {
       q?: string;
       direction?: string;
       fromEmail?: string;
+      /** Only messages carrying every label given, e.g. ["state:unreplied"]. */
+      labels?: string | string[];
       limit?: number;
       cursor?: string;
     }
@@ -327,6 +387,10 @@ class Messages {
     if (opts?.q) params.q = opts.q;
     if (opts?.direction) params.direction = opts.direction;
     if (opts?.fromEmail) params.from = opts.fromEmail;
+    if (opts?.labels)
+      params.labels = Array.isArray(opts.labels)
+        ? opts.labels.join(",")
+        : opts.labels;
     if (opts?.cursor) params.cursor = opts.cursor;
     return this.client._request("GET", `/v1/inboxes/${inboxId}/messages`, {
       params,
@@ -389,52 +453,43 @@ class Messages {
   async reply(
     inboxId: string,
     messageId: string,
-    opts: {
-      textBody?: string;
-      htmlBody?: string;
-      images?: AttachmentSource[];
-      attachments?: AttachmentSource[];
-    }
+    opts: ReplyOptions
   ): Promise<SendResult> {
-    const body: Record<string, unknown> = {};
-    if (opts.textBody) body.text_body = opts.textBody;
-    if (opts.htmlBody) body.html_body = opts.htmlBody;
-    const preparedreply = await this.client.attachments._prepare(
-      opts.attachments,
-      opts.images,
-    );
-    if (preparedreply.length) body.attachments = preparedreply;
     return this.client._request(
       "POST",
       `/v1/inboxes/${inboxId}/messages/${messageId}/reply`,
-      { body }
+      { body: await this.replyBody(opts) }
     );
   }
 
-  /** Reply-all to a message. */
+  /** Reply-all to a message. `cc` adds to the original participants. */
   async replyAll(
     inboxId: string,
     messageId: string,
-    opts: {
-      textBody?: string;
-      htmlBody?: string;
-      images?: AttachmentSource[];
-      attachments?: AttachmentSource[];
-    }
+    opts: ReplyOptions
   ): Promise<SendResult> {
-    const body: Record<string, unknown> = {};
-    if (opts.textBody) body.text_body = opts.textBody;
-    if (opts.htmlBody) body.html_body = opts.htmlBody;
-    const preparedreplyAll = await this.client.attachments._prepare(
-      opts.attachments,
-      opts.images,
-    );
-    if (preparedreplyAll.length) body.attachments = preparedreplyAll;
     return this.client._request(
       "POST",
       `/v1/inboxes/${inboxId}/messages/${messageId}/reply-all`,
-      { body }
+      { body: await this.replyBody(opts) }
     );
+  }
+
+  private async replyBody(opts: ReplyOptions): Promise<Record<string, unknown>> {
+    const body: Record<string, unknown> = {};
+    if (opts.textBody) body.text_body = opts.textBody;
+    if (opts.htmlBody) body.html_body = opts.htmlBody;
+    if (opts.to) body.to = Array.isArray(opts.to) ? opts.to : [opts.to];
+    if (opts.cc) body.cc = Array.isArray(opts.cc) ? opts.cc : [opts.cc];
+    if (opts.bcc) body.bcc = Array.isArray(opts.bcc) ? opts.bcc : [opts.bcc];
+    if (opts.sendAt) body.send_at = opts.sendAt;
+    if (opts.calendarInvite) body.calendar_invite = opts.calendarInvite;
+    const prepared = await this.client.attachments._prepare(
+      opts.attachments,
+      opts.images,
+    );
+    if (prepared.length) body.attachments = prepared;
+    return body;
   }
 
   /** Forward a message to new recipients. */
@@ -590,6 +645,97 @@ class Templates {
 
   async delete(templateId: string): Promise<void> {
     await this.client._request("DELETE", `/v1/templates/${templateId}`);
+  }
+}
+
+
+/** Sign in with Dead Simple: the OIDC provider at https://id.deadsimple.email.
+ *
+ * An agent's inbox is its login. Any app that accepts a generic OpenID Connect
+ * provider can let the agent sign up and sign in; the app receives a stable
+ * `sub` (the inbox id), the inbox address and, for registered clients, the
+ * verified human owner behind the agent.
+ */
+class Identity {
+  static readonly ISSUER = "https://id.deadsimple.email";
+
+  constructor(private client: DeadSimple) {}
+
+  /**
+   * Sign in to an app with this inbox. `authorizationUrl` is the URL the app
+   * would send a browser to (`https://id.deadsimple.email/authorize?...`).
+   * With `follow` (default true) the returned redirect is fetched so the app
+   * completes the login; `final_url` / `final_status` report where it landed.
+   */
+  async signIn(
+    inboxId: string,
+    authorizationUrl: string,
+    opts: { follow?: boolean } = {}
+  ): Promise<IdentitySignInResult> {
+    const out = await this.client._request<IdentitySignInResult>(
+      "POST",
+      `/v1/inboxes/${inboxId}/identity/sign-in`,
+      { body: { authorization_url: authorizationUrl } }
+    );
+    if (opts.follow ?? true) {
+      const resp = await fetch(out.redirect_to, { redirect: "follow" });
+      out.final_url = resp.url;
+      out.final_status = resp.status;
+    }
+    return out;
+  }
+
+  /** Enroll a P-256 public key (JWK or PEM) so the agent can sign in with a signed assertion. */
+  async enrollKey(
+    inboxId: string,
+    opts: { publicKey: Record<string, unknown> | string; name?: string }
+  ): Promise<IdentityKey> {
+    const body: Record<string, unknown> = { public_key: opts.publicKey };
+    if (opts.name) body.name = opts.name;
+    return this.client._request("POST", `/v1/inboxes/${inboxId}/identity/keys`, { body });
+  }
+
+  async listKeys(inboxId: string): Promise<{ keys: IdentityKey[]; total: number }> {
+    return this.client._request("GET", `/v1/inboxes/${inboxId}/identity/keys`);
+  }
+
+  async deleteKey(inboxId: string, kid: string): Promise<void> {
+    await this.client._request("DELETE", `/v1/inboxes/${inboxId}/identity/keys/${kid}`);
+  }
+
+  /** Apps this inbox has signed in to. */
+  async connections(
+    inboxId: string
+  ): Promise<{ connections: IdentityConnection[]; total: number }> {
+    return this.client._request("GET", `/v1/inboxes/${inboxId}/identity/connections`);
+  }
+
+  /** Register your app as a relying party. The client_secret is returned once. */
+  async registerClient(opts: {
+    clientName: string;
+    redirectUris: string[];
+    clientUri?: string;
+    logoUri?: string;
+    scope?: string;
+    tokenEndpointAuthMethod?: "client_secret_basic" | "client_secret_post" | "none";
+  }): Promise<IdentityClient & { client_secret?: string }> {
+    const body: Record<string, unknown> = {
+      client_name: opts.clientName,
+      redirect_uris: opts.redirectUris,
+      scope: opts.scope ?? "openid email profile owner_email org offline_access",
+      token_endpoint_auth_method: opts.tokenEndpointAuthMethod ?? "client_secret_basic",
+    };
+    if (opts.clientUri) body.client_uri = opts.clientUri;
+    if (opts.logoUri) body.logo_uri = opts.logoUri;
+    return this.client._request("POST", "/v1/identity/clients", { body });
+  }
+
+  async listClients(): Promise<{ clients: IdentityClient[]; total: number }> {
+    return this.client._request("GET", "/v1/identity/clients");
+  }
+
+  async deleteClient(clientId: string): Promise<void> {
+    await this.client._request("DELETE", `/v1/identity/clients/${clientId}`);
   }
 }
 

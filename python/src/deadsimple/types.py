@@ -145,10 +145,15 @@ class MessageList:
 class SendResult:
     message_id: str
     status: str
+    # Present only on a calendar invite. Rescheduling or cancelling the event
+    # is matched to the original by UID, so an agent that does not keep this
+    # cannot change the meeting it just booked.
+    calendar_uid: str = ""
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> SendResult:
-        return cls(message_id=d.get("message_id", ""), status=d.get("status", ""))
+        return cls(message_id=d.get("message_id", ""), status=d.get("status", ""),
+                   calendar_uid=d.get("calendar_uid", ""))
 
 
 @dataclass
