@@ -16,8 +16,8 @@ Email API for AI agents. Create inboxes, send/receive email, manage threads and 
 - **delete_inbox** — Delete an inbox and all its messages
 
 ### Sending Email
-- **send_email** — Send an email from an inbox (to, subject, body, cc, bcc)
-- **reply_to_message** — Reply to a message with automatic threading
+- **send_email** — Send an email from an inbox (to, subject, body, cc, bcc). Pass `in_reply_to` to thread it onto an existing conversation
+- **reply_to_message** — Reply to a message with automatic threading (cc, bcc, to, reply_all). Works on messages you sent too, where it replies to the original recipients rather than to yourself
 - **forward_message** — Forward a message to new recipients
 
 ### Reading Email
@@ -36,6 +36,9 @@ Email API for AI agents. Create inboxes, send/receive email, manage threads and 
 ### Account
 - **get_usage** — Get account usage metrics (inboxes, emails, plan limits)
 
+### Identity
+- **sign_in_with_inbox**: Sign in to a third-party app with the inbox as the agent's identity (Sign in with Dead Simple, an OpenID Connect provider at https://id.deadsimple.email). Parameters: `inbox_id`, `authorization_url` (the app's `https://id.deadsimple.email/authorize?...` URL, passed exactly as produced), `follow=true` to fetch the redirect so the login completes
+
 ## Quick Start
 
 ```
@@ -53,3 +56,5 @@ Get your API key at https://app.deadsimple.email/dashboard/settings
 - Documentation: https://deadsimple.email/docs
 - Dashboard: https://app.deadsimple.email
 - Python SDK: https://pypi.org/project/deadsimple-email/
+- Sign in with Dead Simple: https://deadsimple.email/identity.html
+- Pay per request (no API key): https://deadsimple.email/pay-per-request.html

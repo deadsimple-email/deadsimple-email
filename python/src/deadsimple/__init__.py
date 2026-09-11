@@ -21,7 +21,7 @@ Async usage::
         inbox = await client.inboxes.create(display_name="My Agent")
 """
 
-from deadsimple.client import AsyncDeadSimple, DeadSimple, WebSocketStream
+from deadsimple.client import AsyncDeadSimple, DeadSimple, WebSocketStream, make_assertion
 from deadsimple.exceptions import (
     AuthenticationError,
     DeadSimpleError,
@@ -37,6 +37,7 @@ __all__ = [
     "DeadSimple",
     "AsyncDeadSimple",
     "WebSocketStream",
+    "make_assertion",
     "DeadSimpleError",
     "AuthenticationError",
     "NotFoundError",

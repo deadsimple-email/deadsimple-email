@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.1
+
+### Changed
+- `make_assertion` is exported from the package root, so a worker holding
+  only the agent's private key can build a sign-in assertion without a client.
+- README documents identity and pay-per-request.
+
 ## 0.9.0
 
 ### Added

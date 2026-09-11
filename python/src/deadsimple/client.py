@@ -1461,6 +1461,11 @@ class _AsyncTemplates:
     async def delete(self, template_id: str) -> None:
         await self._c._request("DELETE", f"/v1/templates/{template_id}")
 
+# Public alias: a worker that holds only the agent's private key (no API key)
+# can build the sign-in assertion without constructing a client.
+make_assertion = _Identity.make_assertion
+
+
 class _AsyncIdentity:
     """Async version of :class:`_Identity`."""
 

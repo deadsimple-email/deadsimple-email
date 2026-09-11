@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.5.1
+
+### Changed
+- README documents identity and pay-per-request.
+
 ## 1.5.0
 
 ### Added
