@@ -1,5 +1,5 @@
 export { DeadSimple } from "./client.js";
-export type { DeadSimpleOptions } from "./client.js";
+export type { DeadSimpleOptions, CalendarListOptions } from "./client.js";
 
 export {
   DeadSimpleError,
@@ -37,9 +37,22 @@ export type {
   ApiKey,
   ApiKeyList,
   Usage,
+  Metrics,
+  MetricsBucket,
+  MetricsInterval,
   Workspace,
   WorkspaceList,
   Pod,
   PodList,
   AttachmentUrl,
+  CalendarAttendee,
+  CalendarEvent,
+  CalendarEventInput,
+  CalendarEventList,
+  CalendarEventStatus,
+  CalendarFeed,
+  CalendarInviteResult,
+  CalendarOrganizer,
+  CalendarResponse,
+  CalendarRsvpResult,
 } from "./types.js";

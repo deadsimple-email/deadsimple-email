@@ -51,6 +51,10 @@ export interface Message {
   attachments: Attachment[];
   is_spam?: boolean;
   spam_score?: number;
+  /** Prompt-injection scan of inbound mail: "low" | "medium" | "high". Absent on outbound. */
+  injection_risk?: "low" | "medium" | "high";
+  /** 0..1 injection score that produced `injection_risk`. */
+  injection_score?: number;
   created_at: string;
   received_at: string;
 }
@@ -211,6 +215,9 @@ export interface Webhook {
   signing_secret?: string;
   /** Custom delivery headers. Values are masked by the API (write-only). */
   headers?: Record<string, string>;
+  /** Inboxes this webhook is restricted to. Empty means every inbox. */
+  inbox_ids: string[];
+  workspace_id?: string;
 }
 
 export interface WebhookList {
@@ -245,11 +252,39 @@ export interface ApiKey {
   created_at: string;
   key?: string;
   revoked_at?: string;
+  /** Inboxes the key is restricted to. Empty means account- or workspace-wide. */
+  inbox_ids: string[];
+  workspace_id?: string;
 }
 
 export interface ApiKeyList {
   api_keys: ApiKey[];
   count: number;
+}
+
+export type MetricsInterval = "day" | "hour";
+
+/** One interval of GET /v1/metrics; also the shape of `Metrics.totals`. */
+export interface MetricsBucket {
+  /** Bucket start, UTC. Absent on `totals`. */
+  start?: string;
+  sent: number;
+  received: number;
+  bounced: number;
+  complained: number;
+  opened: number;
+  clicked: number;
+  webhook_deliveries: number;
+  webhook_failures: number;
+  injection_flagged: number;
+}
+
+export interface Metrics {
+  interval: MetricsInterval;
+  from: string;
+  to: string;
+  series: MetricsBucket[];
+  totals: MetricsBucket;
 }
 
 export interface Usage {
@@ -346,4 +381,107 @@ export interface IdentityClient {
   issuer?: string;
   discovery_url?: string;
   warning?: string;
+}
+
+// ── Agent calendar ───────────────────────────────────────────────────────────
+
+export type CalendarEventStatus = "confirmed" | "tentative" | "cancelled";
+export type CalendarResponse = "needs-action" | "accepted" | "declined" | "tentative";
+
+export interface CalendarAttendee {
+  email: string;
+  name?: string;
+  /** The attendee's answer as last seen (our own rsvp, or their REPLY). */
+  response?: CalendarResponse;
+  /** OPT-PARTICIPANT rather than REQ-PARTICIPANT on the invitation. */
+  optional?: boolean;
+}
+
+export interface CalendarOrganizer {
+  email: string;
+  name?: string;
+}
+
+/**
+ * Fields for creating or updating an event. Times are ISO 8601 and need a
+ * zone: a trailing "Z", an offset, or `timezone`. A bare date makes an
+ * all-day event. Everything is optional on update.
+ */
+export interface CalendarEventInput {
+  title?: string;
+  start?: string;
+  /** Omit to use `duration_minutes` (default 30). On update, a moved start keeps the length. */
+  end?: string;
+  duration_minutes?: number;
+  /** IANA zone for a local start/end with no offset, e.g. "America/New_York". */
+  timezone?: string;
+  all_day?: boolean;
+  description?: string;
+  location?: string;
+  status?: CalendarEventStatus;
+  /** Defaults to the inbox itself. */
+  organizer?: CalendarOrganizer | string;
+  attendees?: (string | CalendarAttendee)[];
+  /** Create only: bring your own iCalendar UID. */
+  ical_uid?: string;
+  sequence?: number;
+}
+
+export interface CalendarEvent {
+  event_id: string;
+  inbox_id: string;
+  workspace_id?: string | null;
+  /** Stable across updates; what updates, cancellations and replies are matched on. */
+  ical_uid: string;
+  title: string;
+  description: string;
+  location: string;
+  /** ISO 8601 UTC, e.g. "2026-09-15T19:00:00Z". */
+  start_at: string;
+  /** ISO 8601 UTC. Exclusive for all-day events. */
+  end_at: string;
+  timezone: string;
+  all_day: boolean;
+  status: CalendarEventStatus;
+  organizer: CalendarOrganizer;
+  attendees: CalendarAttendee[];
+  /** api = created here; sent = created here and sent as an invitation; inbound = arrived by email. */
+  source: "api" | "sent" | "inbound";
+  sequence: number;
+  /** The invitation we sent, or the inbound message that last changed the event. */
+  message_id?: string | null;
+  invited_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CalendarEventList {
+  events: CalendarEvent[];
+  count: number;
+  /** Present when there is another page. */
+  cursor?: string;
+}
+
+export interface CalendarInviteResult extends CalendarEvent {
+  message_id: string;
+  /** CANCEL when the event's status is cancelled; REQUEST otherwise. */
+  method: "REQUEST" | "CANCEL";
+  sent_to: string[];
+}
+
+export interface CalendarRsvpResult extends CalendarEvent {
+  message_id: string;
+  response: "accepted" | "declined" | "tentative";
+}
+
+export interface CalendarFeed {
+  inbox_id: string;
+  email: string;
+  /** https URL of the .ics feed, token included. Treat as a secret. */
+  feed_url: string;
+  /** The same feed as a webcal:// link. */
+  webcal_url: string;
+  token_created_at: string;
+  /** True when this call issued a new token (first request, or a rotate). */
+  rotated: boolean;
 }

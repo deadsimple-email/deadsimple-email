@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.6.0
+
+### Added
+- `client.calendar`: per-inbox calendar events (create, list, listAll, get,
+  update, delete), `invite`, `rsvp`, `feed` and `rotateFeed`. Inbound
+  invitations, updates, cancellations and replies are ingested automatically
+  and surface as `calendar_event` on messages.
+- `client.metrics.get({ from, to, interval, inboxIds })`: daily or hourly
+  time series of sent, received, bounced, complained, opened, clicked,
+  webhook deliveries and failures, and injection-flagged messages.
+- Inbox-scoped API keys (`apiKeys.create({ inboxIds })`, `apiKeys.get`) and
+  inbox-scoped webhooks (`webhooks.create({ inboxIds })`, `webhooks.get`,
+  `webhooks.update`).
+- `Message.injection_risk` and `Message.injection_score` typed.
+
 ## 1.5.1
 
 ### Changed

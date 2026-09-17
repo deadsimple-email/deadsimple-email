@@ -88,6 +88,10 @@ class Message:
     spam_score: float
     created_at: str
     received_at: str
+    # Prompt-injection scan of inbound mail: "low" | "medium" | "high" and a
+    # 0..1 score. Absent on outbound messages.
+    injection_risk: str = ""
+    injection_score: float = 0.0
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> Message:
@@ -95,6 +99,8 @@ class Message:
         data["to"] = d.get("to", [])
         data["cc"] = d.get("cc", [])
         data["attachments"] = [Attachment.from_dict(a) for a in d.get("attachments", [])]
+        data["injection_risk"] = d.get("injection_risk") or ""
+        data["injection_score"] = float(d.get("injection_score") or 0)
         return cls(**data)
 
 
@@ -239,6 +245,9 @@ class Webhook:
     signing_secret: str | None = None
     # Custom delivery headers. Values are masked by the API (write-only).
     headers: dict[str, str] = field(default_factory=dict)
+    # Inboxes this webhook is restricted to. Empty means every inbox.
+    inbox_ids: list[str] = field(default_factory=list)
+    workspace_id: str | None = None
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> Webhook:
@@ -304,6 +313,9 @@ class ApiKey:
     created_at: str
     key: str | None = None
     revoked_at: str | None = None
+    # Inboxes the key is restricted to. Empty means account- or workspace-wide.
+    inbox_ids: list[str] = field(default_factory=list)
+    workspace_id: str | None = None
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> ApiKey:
@@ -320,6 +332,47 @@ class ApiKeyList:
         return cls(
             api_keys=[ApiKey.from_dict(k) for k in d.get("api_keys", [])],
             count=d.get("count", 0),
+        )
+
+
+@dataclass
+class MetricsBucket:
+    """One interval of GET /v1/metrics (also the shape of `Metrics.totals`)."""
+
+    start: str
+    sent: int = 0
+    received: int = 0
+    bounced: int = 0
+    complained: int = 0
+    opened: int = 0
+    clicked: int = 0
+    webhook_deliveries: int = 0
+    webhook_failures: int = 0
+    injection_flagged: int = 0
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> MetricsBucket:
+        return cls(**{k: d[k] for k in cls.__dataclass_fields__ if k in d})
+
+
+@dataclass
+class Metrics:
+    interval: str
+    from_: str
+    to: str
+    series: list[MetricsBucket]
+    totals: MetricsBucket
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> Metrics:
+        totals = dict(d.get("totals") or {})
+        totals.setdefault("start", d.get("from", ""))
+        return cls(
+            interval=d.get("interval", "day"),
+            from_=d.get("from", ""),
+            to=d.get("to", ""),
+            series=[MetricsBucket.from_dict(b) for b in d.get("series", [])],
+            totals=MetricsBucket.from_dict(totals),
         )
 
 

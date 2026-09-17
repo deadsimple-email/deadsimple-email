@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.10.0
+
+### Added
+- `client.calendar`: per-inbox calendar events (create, list, list_all, get,
+  update, delete), `invite` to send the event as an ICS invitation, `rsvp` to
+  answer one, and `feed` / `rotate_feed` for a subscribable ICS feed. Inbound
+  invitations, updates, cancellations and replies are ingested automatically
+  and surface as `calendar_event` on messages. MCP tools
+  `list_calendar_events` and `create_calendar_event`.
+- `client.metrics.get(from_=, to=, interval=, inbox_ids=)`: daily or hourly
+  time series of sent, received, bounced, complained, opened, clicked,
+  webhook deliveries and failures, and injection-flagged messages.
+- Inbox-scoped API keys: `client.api_keys.create(name, inbox_ids=[...])` and
+  `client.api_keys.get(key_id)`.
+- Inbox-scoped webhooks: `client.webhooks.create(url, events, inbox_ids=[...])`,
+  `client.webhooks.get(webhook_id)` and `client.webhooks.update(webhook_id, ...)`.
+- `Message.injection_risk` and `Message.injection_score` from the inbound
+  prompt-injection scanner; the MCP `read_message` and `read_messages` tools
+  include them when the risk is medium or high.
+
 ## 0.9.1
 
 ### Changed

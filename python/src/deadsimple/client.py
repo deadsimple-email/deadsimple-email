@@ -28,6 +28,7 @@ from deadsimple.types import (
     Message,
     MessageFull,
     MessageList,
+    Metrics,
     SendResult,
     Thread,
     ThreadDetail,
@@ -124,10 +125,12 @@ class DeadSimple:
         self.api_keys = _ApiKeys(self)
         self.workspaces = _Workspaces(self)
         self.usage = _Usage(self)
+        self.metrics = _Metrics(self)
         self.attachments = _Attachments(self)
         self.filters = _Filters(self)
         self.templates = _Templates(self)
         self.identity = _Identity(self)
+        self.calendar = _Calendar(self)
 
     def _request(
         self,
@@ -195,10 +198,12 @@ class AsyncDeadSimple:
         self.api_keys = _AsyncApiKeys(self)
         self.workspaces = _AsyncWorkspaces(self)
         self.usage = _AsyncUsage(self)
+        self.metrics = _AsyncMetrics(self)
         self.attachments = _AsyncAttachments(self)
         self.filters = _AsyncFilters(self)
         self.templates = _AsyncTemplates(self)
         self.identity = _AsyncIdentity(self)
+        self.calendar = _AsyncCalendar(self)
 
     async def _request(
         self,
@@ -670,24 +675,47 @@ class _Webhooks:
     def __init__(self, client: DeadSimple):
         self._c = client
 
-    def create(self, url: str, events: list[str], description: str = "", *, headers: dict[str, str] | None = None, idempotency_key: str | None = None) -> Webhook:
+    def create(self, url: str, events: list[str], description: str = "", *, headers: dict[str, str] | None = None, inbox_ids: list[str] | None = None, idempotency_key: str | None = None) -> Webhook:
         """Register a webhook. Returns signing secret (shown once).
 
         `headers` are sent on every delivery attempt (and every retry), for
         endpoints that require their own auth, e.g.
         `headers={"Authorization": "Bearer ..."}`. Values are write-only: the
         API masks them in every response.
+
+        `inbox_ids` restricts the webhook to events on those inboxes (max 100,
+        each owned by the account). Omit it for an account-wide webhook.
         """
         body: dict[str, Any] = {"url": url, "events": events}
         if description:
             body["description"] = description
         if headers:
             body["headers"] = headers
+        if inbox_ids is not None:
+            body["inbox_ids"] = inbox_ids
         return Webhook.from_dict(self._c._request("POST", "/v1/webhooks", json=body, idempotency_key=idempotency_key))
 
     def list(self) -> WebhookList:
         """List all webhooks."""
         return WebhookList.from_dict(self._c._request("GET", "/v1/webhooks"))
+
+    def get(self, webhook_id: str) -> Webhook:
+        """Get one webhook (the signing secret is never returned)."""
+        return Webhook.from_dict(self._c._request("GET", f"/v1/webhooks/{webhook_id}"))
+
+    def update(
+        self,
+        webhook_id: str,
+        *,
+        url: str | None = None,
+        events: list[str] | None = None,
+        description: str | None = None,
+        inbox_ids: list[str] | None = None,
+        is_active: bool | None = None,
+    ) -> Webhook:
+        """Partially update a webhook. Pass `inbox_ids=[]` to clear its inbox scope."""
+        body = _webhook_patch(url, events, description, inbox_ids, is_active)
+        return Webhook.from_dict(self._c._request("PATCH", f"/v1/webhooks/{webhook_id}", json=body))
 
     def delete(self, webhook_id: str) -> None:
         """Delete a webhook."""
@@ -732,16 +760,23 @@ class _ApiKeys:
     def __init__(self, client: DeadSimple):
         self._c = client
 
-    def create(self, name: str, permissions: list[str] | None = None) -> ApiKey:
-        """Create a new API key. The key value is only returned once."""
-        body: dict[str, Any] = {"name": name}
-        if permissions:
-            body["permissions"] = permissions
+    def create(self, name: str, permissions: list[str] | None = None, *, workspace_id: str | None = None, inbox_ids: list[str] | None = None) -> ApiKey:
+        """Create a new API key. The key value is only returned once.
+
+        `workspace_id` scopes the key to a workspace; `inbox_ids` (max 100)
+        scopes it to specific inboxes: it then sees only those inboxes, its
+        listings are filtered to them, and it cannot create inboxes.
+        """
+        body = _api_key_body(name, permissions, workspace_id, inbox_ids)
         return ApiKey.from_dict(self._c._request("POST", "/v1/api-keys", json=body))
 
     def list(self) -> ApiKeyList:
         """List API keys (secrets are masked)."""
         return ApiKeyList.from_dict(self._c._request("GET", "/v1/api-keys"))
+
+    def get(self, key_id: str) -> ApiKey:
+        """Get one API key's metadata (never the secret)."""
+        return ApiKey.from_dict(self._c._request("GET", f"/v1/api-keys/{key_id}"))
 
     def delete(self, key_id: str) -> None:
         """Revoke an API key."""
@@ -792,6 +827,66 @@ class _Usage:
     def get(self) -> Usage:
         """Get current usage: inboxes, emails, webhooks, domains."""
         return Usage.from_dict(self._c._request("GET", "/v1/usage"))
+
+
+class _Metrics:
+    """Metrics time series (GET /v1/metrics)."""
+
+    def __init__(self, client: DeadSimple):
+        self._c = client
+
+    def get(
+        self,
+        *,
+        from_: str | None = None,
+        to: str | None = None,
+        interval: str = "day",
+        inbox_ids: list[str] | None = None,
+    ) -> Metrics:
+        """Bucketed sent/received/bounced/complained/opened/clicked/webhook/injection counts.
+
+        `from_` and `to` are ISO dates or datetimes (default: the last 30 days;
+        at most 92 days). `interval` is "day" or "hour" (hour only for windows
+        of 7 days or less). `inbox_ids` restricts the series to those inboxes.
+        """
+        return Metrics.from_dict(self._c._request("GET", "/v1/metrics", params=_metrics_params(from_, to, interval, inbox_ids)))
+
+
+def _api_key_body(name: str, permissions: list[str] | None, workspace_id: str | None, inbox_ids: list[str] | None) -> dict[str, Any]:
+    body: dict[str, Any] = {"name": name}
+    if permissions:
+        body["permissions"] = permissions
+    if workspace_id:
+        body["workspace_id"] = workspace_id
+    if inbox_ids is not None:
+        body["inbox_ids"] = inbox_ids
+    return body
+
+
+def _webhook_patch(url, events, description, inbox_ids, is_active) -> dict[str, Any]:
+    body: dict[str, Any] = {}
+    if url is not None:
+        body["url"] = url
+    if events is not None:
+        body["events"] = events
+    if description is not None:
+        body["description"] = description
+    if inbox_ids is not None:
+        body["inbox_ids"] = inbox_ids
+    if is_active is not None:
+        body["is_active"] = is_active
+    return body
+
+
+def _metrics_params(from_, to, interval, inbox_ids) -> dict[str, str]:
+    params: dict[str, str] = {"interval": interval}
+    if from_:
+        params["from"] = from_
+    if to:
+        params["to"] = to
+    if inbox_ids:
+        params["inbox_id"] = ",".join(inbox_ids)
+    return params
 
 
 # ── Outbound attachment helpers ──────────────────────────────────────────────
@@ -1271,16 +1366,34 @@ class _AsyncWebhooks:
     def __init__(self, client: AsyncDeadSimple):
         self._c = client
 
-    async def create(self, url: str, events: list[str], description: str = "", *, headers: dict[str, str] | None = None, idempotency_key: str | None = None) -> Webhook:
+    async def create(self, url: str, events: list[str], description: str = "", *, headers: dict[str, str] | None = None, inbox_ids: list[str] | None = None, idempotency_key: str | None = None) -> Webhook:
         body: dict[str, Any] = {"url": url, "events": events}
         if description:
             body["description"] = description
         if headers:
             body["headers"] = headers
+        if inbox_ids is not None:
+            body["inbox_ids"] = inbox_ids
         return Webhook.from_dict(await self._c._request("POST", "/v1/webhooks", json=body, idempotency_key=idempotency_key))
 
     async def list(self) -> WebhookList:
         return WebhookList.from_dict(await self._c._request("GET", "/v1/webhooks"))
+
+    async def get(self, webhook_id: str) -> Webhook:
+        return Webhook.from_dict(await self._c._request("GET", f"/v1/webhooks/{webhook_id}"))
+
+    async def update(
+        self,
+        webhook_id: str,
+        *,
+        url: str | None = None,
+        events: list[str] | None = None,
+        description: str | None = None,
+        inbox_ids: list[str] | None = None,
+        is_active: bool | None = None,
+    ) -> Webhook:
+        body = _webhook_patch(url, events, description, inbox_ids, is_active)
+        return Webhook.from_dict(await self._c._request("PATCH", f"/v1/webhooks/{webhook_id}", json=body))
 
     async def delete(self, webhook_id: str) -> None:
         await self._c._request("DELETE", f"/v1/webhooks/{webhook_id}")
@@ -1315,14 +1428,15 @@ class _AsyncApiKeys:
     def __init__(self, client: AsyncDeadSimple):
         self._c = client
 
-    async def create(self, name: str, permissions: list[str] | None = None) -> ApiKey:
-        body: dict[str, Any] = {"name": name}
-        if permissions:
-            body["permissions"] = permissions
+    async def create(self, name: str, permissions: list[str] | None = None, *, workspace_id: str | None = None, inbox_ids: list[str] | None = None) -> ApiKey:
+        body = _api_key_body(name, permissions, workspace_id, inbox_ids)
         return ApiKey.from_dict(await self._c._request("POST", "/v1/api-keys", json=body))
 
     async def list(self) -> ApiKeyList:
         return ApiKeyList.from_dict(await self._c._request("GET", "/v1/api-keys"))
+
+    async def get(self, key_id: str) -> ApiKey:
+        return ApiKey.from_dict(await self._c._request("GET", f"/v1/api-keys/{key_id}"))
 
     async def delete(self, key_id: str) -> None:
         await self._c._request("DELETE", f"/v1/api-keys/{key_id}")
@@ -1362,6 +1476,21 @@ class _AsyncUsage:
 
     async def get(self) -> Usage:
         return Usage.from_dict(await self._c._request("GET", "/v1/usage"))
+
+
+class _AsyncMetrics:
+    def __init__(self, client: AsyncDeadSimple):
+        self._c = client
+
+    async def get(
+        self,
+        *,
+        from_: str | None = None,
+        to: str | None = None,
+        interval: str = "day",
+        inbox_ids: list[str] | None = None,
+    ) -> Metrics:
+        return Metrics.from_dict(await self._c._request("GET", "/v1/metrics", params=_metrics_params(from_, to, interval, inbox_ids)))
 
 
 class _AsyncAttachments:
@@ -1460,6 +1589,147 @@ class _AsyncTemplates:
 
     async def delete(self, template_id: str) -> None:
         await self._c._request("DELETE", f"/v1/templates/{template_id}")
+
+def _calendar_event_body(title, start, end, duration_minutes, timezone, all_day, description,
+                         location, status, organizer, attendees, extra) -> dict[str, Any]:
+    """Only the fields the caller set, so a PATCH stays partial."""
+    body: dict[str, Any] = dict(extra or {})
+    if title is not None:
+        body["title"] = title
+    if start is not None:
+        body["start"] = start
+    if end is not None:
+        body["end"] = end
+    if duration_minutes is not None:
+        body["duration_minutes"] = duration_minutes
+    if timezone is not None:
+        body["timezone"] = timezone
+    if all_day is not None:
+        body["all_day"] = all_day
+    if description is not None:
+        body["description"] = description
+    if location is not None:
+        body["location"] = location
+    if status is not None:
+        body["status"] = status
+    if organizer is not None:
+        body["organizer"] = organizer if isinstance(organizer, dict) else {"email": organizer}
+    if attendees is not None:
+        body["attendees"] = [attendees] if isinstance(attendees, str) else list(attendees)
+    return body
+
+
+def _calendar_list_params(start_from, start_to, status, limit, cursor, inbox_id=None) -> dict[str, str]:
+    params: dict[str, str] = {"limit": str(limit)}
+    if start_from:
+        params["from"] = start_from
+    if start_to:
+        params["to"] = start_to
+    if status:
+        params["status"] = status
+    if cursor:
+        params["cursor"] = cursor
+    if inbox_id:
+        params["inbox_id"] = ",".join(inbox_id) if isinstance(inbox_id, (list, tuple)) else inbox_id
+    return params
+
+
+class _Calendar:
+    """Every inbox has a calendar.
+
+    Put events on it, send any of them as a real invitation (``invite``),
+    answer invitations that arrived by email (``rsvp``), and hand a human a
+    subscription URL (``feed``) for Google Calendar, Apple Calendar or Outlook.
+    Invitations that arrive by email land on the calendar on their own and
+    show up in ``list``; the message that carried one has a ``calendar_event``
+    summary.
+
+    Times are ISO 8601 and need a zone: a trailing ``Z``, an offset, or the
+    ``timezone`` argument. A bare date makes an all-day event.
+    """
+
+    def __init__(self, client: DeadSimple):
+        self._c = client
+
+    def create(self, inbox_id: str, *, title: str, start: str, end: str | None = None,
+               duration_minutes: int | None = None, timezone: str | None = None,
+               all_day: bool | None = None, description: str | None = None,
+               location: str | None = None, status: str | None = None,
+               organizer: dict[str, Any] | str | None = None,
+               attendees: list[Any] | str | None = None, **extra: Any) -> dict[str, Any]:
+        """Create an event. Nothing is sent until ``invite``."""
+        body = _calendar_event_body(title, start, end, duration_minutes, timezone, all_day,
+                                    description, location, status, organizer, attendees, extra)
+        return self._c._request("POST", f"/v1/inboxes/{inbox_id}/calendar/events", json=body)
+
+    def list(self, inbox_id: str, *, start_from: str = "", start_to: str = "", status: str = "",
+             limit: int = 50, cursor: str = "") -> dict[str, Any]:
+        """Events on one inbox, sorted by start. ``start_from``/``start_to`` bound the start time."""
+        return self._c._request("GET", f"/v1/inboxes/{inbox_id}/calendar/events",
+                                params=_calendar_list_params(start_from, start_to, status, limit, cursor))
+
+    def list_all(self, *, inbox_id: list[str] | str | None = None, start_from: str = "",
+                 start_to: str = "", status: str = "", limit: int = 50, cursor: str = "") -> dict[str, Any]:
+        """Events across every inbox on the account (optionally only the given inbox ids)."""
+        return self._c._request("GET", "/v1/calendar/events",
+                                params=_calendar_list_params(start_from, start_to, status, limit, cursor, inbox_id))
+
+    def get(self, inbox_id: str, event_id: str) -> dict[str, Any]:
+        return self._c._request("GET", f"/v1/inboxes/{inbox_id}/calendar/events/{event_id}")
+
+    def update(self, inbox_id: str, event_id: str, *, title: str | None = None, start: str | None = None,
+               end: str | None = None, duration_minutes: int | None = None, timezone: str | None = None,
+               all_day: bool | None = None, description: str | None = None, location: str | None = None,
+               status: str | None = None, organizer: dict[str, Any] | str | None = None,
+               attendees: list[Any] | str | None = None, **extra: Any) -> dict[str, Any]:
+        """Partial update. After an invite has gone out, this raises the event's
+        sequence so the next ``invite`` is an update, not a duplicate."""
+        body = _calendar_event_body(title, start, end, duration_minutes, timezone, all_day,
+                                    description, location, status, organizer, attendees, extra)
+        return self._c._request("PATCH", f"/v1/inboxes/{inbox_id}/calendar/events/{event_id}", json=body)
+
+    def delete(self, inbox_id: str, event_id: str) -> None:
+        self._c._request("DELETE", f"/v1/inboxes/{inbox_id}/calendar/events/{event_id}")
+
+    def invite(self, inbox_id: str, event_id: str, *, subject: str = "", text_body: str = "",
+               html_body: str = "", attendees: list[Any] | None = None,
+               in_reply_to: str = "") -> dict[str, Any]:
+        """Send the event to its attendees as an invitation (Accept/Decline in
+        their mail client). Call again after ``update`` to send the change; a
+        cancelled event goes out as a cancellation."""
+        body: dict[str, Any] = {}
+        if subject:
+            body["subject"] = subject
+        if text_body:
+            body["text_body"] = text_body
+        if html_body:
+            body["html_body"] = html_body
+        if attendees is not None:
+            body["attendees"] = attendees
+        if in_reply_to:
+            body["in_reply_to"] = in_reply_to
+        return self._c._request("POST", f"/v1/inboxes/{inbox_id}/calendar/events/{event_id}/invite", json=body)
+
+    def rsvp(self, inbox_id: str, event_id: str, response: str, *, comment: str = "",
+             subject: str = "") -> dict[str, Any]:
+        """Answer an invitation: ``accepted``, ``declined`` or ``tentative``.
+        Sends an iCalendar REPLY to the organizer."""
+        body: dict[str, Any] = {"response": response}
+        if comment:
+            body["comment"] = comment
+        if subject:
+            body["subject"] = subject
+        return self._c._request("POST", f"/v1/inboxes/{inbox_id}/calendar/events/{event_id}/rsvp", json=body)
+
+    def feed(self, inbox_id: str) -> dict[str, Any]:
+        """The inbox's subscription URLs (``feed_url`` https, ``webcal_url``).
+        Treat them as secrets: the token in the URL is the only credential."""
+        return self._c._request("GET", f"/v1/inboxes/{inbox_id}/calendar/feed")
+
+    def rotate_feed(self, inbox_id: str) -> dict[str, Any]:
+        """Issue a new feed token; the old URL stops working at once."""
+        return self._c._request("POST", f"/v1/inboxes/{inbox_id}/calendar/feed/rotate")
+
 
 # Public alias: a worker that holds only the agent's private key (no API key)
 # can build the sign-in assertion without constructing a client.
@@ -1596,3 +1866,76 @@ class WebSocketStream:
             return _json.loads(raw)
         except Exception:
             raise StopAsyncIteration
+
+
+class _AsyncCalendar:
+    """Async version of :class:`_Calendar`."""
+
+    def __init__(self, client: AsyncDeadSimple):
+        self._c = client
+
+    async def create(self, inbox_id: str, *, title: str, start: str, end: str | None = None,
+                     duration_minutes: int | None = None, timezone: str | None = None,
+                     all_day: bool | None = None, description: str | None = None,
+                     location: str | None = None, status: str | None = None,
+                     organizer: dict[str, Any] | str | None = None,
+                     attendees: list[Any] | str | None = None, **extra: Any) -> dict[str, Any]:
+        body = _calendar_event_body(title, start, end, duration_minutes, timezone, all_day,
+                                    description, location, status, organizer, attendees, extra)
+        return await self._c._request("POST", f"/v1/inboxes/{inbox_id}/calendar/events", json=body)
+
+    async def list(self, inbox_id: str, *, start_from: str = "", start_to: str = "", status: str = "",
+                   limit: int = 50, cursor: str = "") -> dict[str, Any]:
+        return await self._c._request("GET", f"/v1/inboxes/{inbox_id}/calendar/events",
+                                      params=_calendar_list_params(start_from, start_to, status, limit, cursor))
+
+    async def list_all(self, *, inbox_id: list[str] | str | None = None, start_from: str = "",
+                       start_to: str = "", status: str = "", limit: int = 50, cursor: str = "") -> dict[str, Any]:
+        return await self._c._request("GET", "/v1/calendar/events",
+                                      params=_calendar_list_params(start_from, start_to, status, limit, cursor, inbox_id))
+
+    async def get(self, inbox_id: str, event_id: str) -> dict[str, Any]:
+        return await self._c._request("GET", f"/v1/inboxes/{inbox_id}/calendar/events/{event_id}")
+
+    async def update(self, inbox_id: str, event_id: str, *, title: str | None = None, start: str | None = None,
+                     end: str | None = None, duration_minutes: int | None = None, timezone: str | None = None,
+                     all_day: bool | None = None, description: str | None = None, location: str | None = None,
+                     status: str | None = None, organizer: dict[str, Any] | str | None = None,
+                     attendees: list[Any] | str | None = None, **extra: Any) -> dict[str, Any]:
+        body = _calendar_event_body(title, start, end, duration_minutes, timezone, all_day,
+                                    description, location, status, organizer, attendees, extra)
+        return await self._c._request("PATCH", f"/v1/inboxes/{inbox_id}/calendar/events/{event_id}", json=body)
+
+    async def delete(self, inbox_id: str, event_id: str) -> None:
+        await self._c._request("DELETE", f"/v1/inboxes/{inbox_id}/calendar/events/{event_id}")
+
+    async def invite(self, inbox_id: str, event_id: str, *, subject: str = "", text_body: str = "",
+                     html_body: str = "", attendees: list[Any] | None = None,
+                     in_reply_to: str = "") -> dict[str, Any]:
+        body: dict[str, Any] = {}
+        if subject:
+            body["subject"] = subject
+        if text_body:
+            body["text_body"] = text_body
+        if html_body:
+            body["html_body"] = html_body
+        if attendees is not None:
+            body["attendees"] = attendees
+        if in_reply_to:
+            body["in_reply_to"] = in_reply_to
+        return await self._c._request("POST", f"/v1/inboxes/{inbox_id}/calendar/events/{event_id}/invite", json=body)
+
+    async def rsvp(self, inbox_id: str, event_id: str, response: str, *, comment: str = "",
+                   subject: str = "") -> dict[str, Any]:
+        body: dict[str, Any] = {"response": response}
+        if comment:
+            body["comment"] = comment
+        if subject:
+            body["subject"] = subject
+        return await self._c._request("POST", f"/v1/inboxes/{inbox_id}/calendar/events/{event_id}/rsvp", json=body)
+
+    async def feed(self, inbox_id: str) -> dict[str, Any]:
+        return await self._c._request("GET", f"/v1/inboxes/{inbox_id}/calendar/feed")
+
+    async def rotate_feed(self, inbox_id: str) -> dict[str, Any]:
+        return await self._c._request("POST", f"/v1/inboxes/{inbox_id}/calendar/feed/rotate")

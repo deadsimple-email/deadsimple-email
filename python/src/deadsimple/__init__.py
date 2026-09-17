@@ -32,7 +32,7 @@ from deadsimple.exceptions import (
 from deadsimple.types import WebhookEvent
 from deadsimple.webhooks import verify_request, verify_signature
 
-__version__ = "0.8.0"
+__version__ = "0.10.0"
 __all__ = [
     "DeadSimple",
     "AsyncDeadSimple",

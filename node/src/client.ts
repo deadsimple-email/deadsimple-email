@@ -39,6 +39,8 @@ import type {
   InboxList,
   MessageFull,
   MessageList,
+  Metrics,
+  MetricsInterval,
   SendResult,
   ThreadDetail,
   ThreadList,
@@ -51,10 +53,18 @@ import type {
   IdentityKey,
   IdentityConnection,
   IdentityClient,
+  CalendarAttendee,
+  CalendarEvent,
+  CalendarEventInput,
+  CalendarEventList,
+  CalendarEventStatus,
+  CalendarFeed,
+  CalendarInviteResult,
+  CalendarRsvpResult,
 } from "./types.js";
 
 const DEFAULT_BASE_URL = "https://api.deadsimple.email";
-const VERSION = "1.5.1";
+const VERSION = "1.6.0";
 
 export interface DeadSimpleOptions {
   baseUrl?: string;
@@ -115,10 +125,12 @@ export class DeadSimple {
   readonly apiKeys: ApiKeys;
   readonly workspaces: Workspaces;
   readonly usage: UsageResource;
+  readonly metrics: MetricsResource;
   readonly attachments: Attachments;
   readonly filters: Filters;
   readonly templates: Templates;
   readonly identity: Identity;
+  readonly calendar: Calendar;
 
   constructor(apiKey: string, options?: DeadSimpleOptions) {
     if (!apiKey) {
@@ -139,10 +151,12 @@ export class DeadSimple {
     this.apiKeys = new ApiKeys(this);
     this.workspaces = new Workspaces(this);
     this.usage = new UsageResource(this);
+    this.metrics = new MetricsResource(this);
     this.attachments = new Attachments(this);
     this.filters = new Filters(this);
     this.templates = new Templates(this);
     this.identity = new Identity(this);
+    this.calendar = new Calendar(this);
   }
 
   /** @internal */
@@ -739,6 +753,131 @@ class Identity {
   }
 }
 
+export interface CalendarListOptions {
+  /** ISO 8601 date or datetime. Events starting at or after this. */
+  from?: string;
+  /** ISO 8601 date or datetime. Events starting at or before this (a bare date means the end of that day). */
+  to?: string;
+  status?: CalendarEventStatus;
+  limit?: number;
+  cursor?: string;
+}
+
+function calendarListParams(opts: CalendarListOptions & { inboxId?: string | string[] }): Record<string, string> {
+  const params: Record<string, string> = {};
+  if (opts.from) params.from = opts.from;
+  if (opts.to) params.to = opts.to;
+  if (opts.status) params.status = opts.status;
+  if (opts.limit) params.limit = String(opts.limit);
+  if (opts.cursor) params.cursor = opts.cursor;
+  if (opts.inboxId) params.inbox_id = Array.isArray(opts.inboxId) ? opts.inboxId.join(",") : opts.inboxId;
+  return params;
+}
+
+/**
+ * Every inbox has a calendar. Put events on it, send any of them as a real
+ * invitation (`invite`), answer invitations that arrived by email (`rsvp`),
+ * and hand a human a subscription URL (`feed`) for Google Calendar, Apple
+ * Calendar or Outlook. Invitations that arrive by email land on the calendar
+ * on their own; the message that carried one has a `calendar_event` summary.
+ *
+ * Times are ISO 8601 and need a zone: a trailing "Z", an offset, or the
+ * `timezone` field. A bare date makes an all-day event.
+ */
+class Calendar {
+  constructor(private client: DeadSimple) {}
+
+  /** Create an event. Nothing is sent until `invite`. */
+  async create(
+    inboxId: string,
+    event: CalendarEventInput & { title: string; start: string }
+  ): Promise<CalendarEvent> {
+    return this.client._request("POST", `/v1/inboxes/${inboxId}/calendar/events`, {
+      body: { ...event },
+    });
+  }
+
+  /** Events on one inbox, sorted by start. */
+  async list(inboxId: string, opts: CalendarListOptions = {}): Promise<CalendarEventList> {
+    return this.client._request("GET", `/v1/inboxes/${inboxId}/calendar/events`, {
+      params: calendarListParams(opts),
+    });
+  }
+
+  /** Events across every inbox on the account (optionally only the given inbox ids). */
+  async listAll(
+    opts: CalendarListOptions & { inboxId?: string | string[] } = {}
+  ): Promise<CalendarEventList> {
+    return this.client._request("GET", "/v1/calendar/events", { params: calendarListParams(opts) });
+  }
+
+  async get(inboxId: string, eventId: string): Promise<CalendarEvent> {
+    return this.client._request("GET", `/v1/inboxes/${inboxId}/calendar/events/${eventId}`);
+  }
+
+  /**
+   * Partial update. After an invite has gone out, this raises the event's
+   * sequence so the next `invite` is an update, not a duplicate.
+   */
+  async update(inboxId: string, eventId: string, changes: CalendarEventInput): Promise<CalendarEvent> {
+    return this.client._request("PATCH", `/v1/inboxes/${inboxId}/calendar/events/${eventId}`, {
+      body: { ...changes },
+    });
+  }
+
+  async delete(inboxId: string, eventId: string): Promise<void> {
+    await this.client._request("DELETE", `/v1/inboxes/${inboxId}/calendar/events/${eventId}`);
+  }
+
+  /**
+   * Send the event to its attendees as an invitation (Accept/Decline in their
+   * mail client). Call again after `update` to send the change; a cancelled
+   * event goes out as a cancellation.
+   */
+  async invite(
+    inboxId: string,
+    eventId: string,
+    opts: {
+      subject?: string;
+      textBody?: string;
+      htmlBody?: string;
+      attendees?: (string | CalendarAttendee)[];
+      inReplyTo?: string;
+    } = {}
+  ): Promise<CalendarInviteResult> {
+    const body: Record<string, unknown> = {};
+    if (opts.subject) body.subject = opts.subject;
+    if (opts.textBody) body.text_body = opts.textBody;
+    if (opts.htmlBody) body.html_body = opts.htmlBody;
+    if (opts.attendees) body.attendees = opts.attendees;
+    if (opts.inReplyTo) body.in_reply_to = opts.inReplyTo;
+    return this.client._request("POST", `/v1/inboxes/${inboxId}/calendar/events/${eventId}/invite`, { body });
+  }
+
+  /** Answer an invitation. Sends an iCalendar REPLY to the organizer. */
+  async rsvp(
+    inboxId: string,
+    eventId: string,
+    response: "accepted" | "declined" | "tentative",
+    opts: { comment?: string; subject?: string } = {}
+  ): Promise<CalendarRsvpResult> {
+    const body: Record<string, unknown> = { response };
+    if (opts.comment) body.comment = opts.comment;
+    if (opts.subject) body.subject = opts.subject;
+    return this.client._request("POST", `/v1/inboxes/${inboxId}/calendar/events/${eventId}/rsvp`, { body });
+  }
+
+  /** The inbox's subscription URLs. Treat them as secrets: the token in the URL is the only credential. */
+  async feed(inboxId: string): Promise<CalendarFeed> {
+    return this.client._request("GET", `/v1/inboxes/${inboxId}/calendar/feed`);
+  }
+
+  /** Issue a new feed token; the old URL stops working at once. */
+  async rotateFeed(inboxId: string): Promise<CalendarFeed> {
+    return this.client._request("POST", `/v1/inboxes/${inboxId}/calendar/feed/rotate`);
+  }
+}
+
 class Threads {
   constructor(private client: DeadSimple) {}
 
@@ -805,12 +944,16 @@ class Webhooks {
    * endpoints that require their own auth, e.g.
    * `headers: { Authorization: "Bearer ..." }`. Values are write-only: the API
    * masks them in every response.
+   *
+   * `inboxIds` restricts the webhook to events on those inboxes (max 100, each
+   * owned by the account). Omit it for an account-wide webhook.
    */
   async create(opts: {
     url: string;
     events: string[];
     description?: string;
     headers?: Record<string, string>;
+    inboxIds?: string[];
     idempotencyKey?: string;
   }): Promise<Webhook> {
     const body: Record<string, unknown> = {
@@ -819,6 +962,7 @@ class Webhooks {
     };
     if (opts.description) body.description = opts.description;
     if (opts.headers) body.headers = opts.headers;
+    if (opts.inboxIds) body.inbox_ids = opts.inboxIds;
     return this.client._request("POST", "/v1/webhooks", {
       body,
       idempotencyKey: opts.idempotencyKey,
@@ -828,6 +972,31 @@ class Webhooks {
   /** List all webhooks. */
   async list(): Promise<WebhookList> {
     return this.client._request("GET", "/v1/webhooks");
+  }
+
+  /** Get one webhook (the signing secret is never returned). */
+  async get(webhookId: string): Promise<Webhook> {
+    return this.client._request("GET", `/v1/webhooks/${webhookId}`);
+  }
+
+  /** Partially update a webhook. Pass `inboxIds: []` to clear its inbox scope. */
+  async update(
+    webhookId: string,
+    opts: {
+      url?: string;
+      events?: string[];
+      description?: string;
+      inboxIds?: string[];
+      isActive?: boolean;
+    },
+  ): Promise<Webhook> {
+    const body: Record<string, unknown> = {};
+    if (opts.url !== undefined) body.url = opts.url;
+    if (opts.events !== undefined) body.events = opts.events;
+    if (opts.description !== undefined) body.description = opts.description;
+    if (opts.inboxIds !== undefined) body.inbox_ids = opts.inboxIds;
+    if (opts.isActive !== undefined) body.is_active = opts.isActive;
+    return this.client._request("PATCH", `/v1/webhooks/${webhookId}`, { body });
   }
 
   /** Delete a webhook. */
@@ -890,19 +1059,34 @@ class Domains {
 class ApiKeys {
   constructor(private client: DeadSimple) {}
 
-  /** Create a new API key. The key value is only returned once. */
+  /**
+   * Create a new API key. The key value is only returned once.
+   *
+   * `workspaceId` scopes the key to a workspace; `inboxIds` (max 100) scopes
+   * it to specific inboxes: it then sees only those inboxes, its listings are
+   * filtered to them, and it cannot create inboxes.
+   */
   async create(opts: {
     name: string;
     permissions?: string[];
+    workspaceId?: string;
+    inboxIds?: string[];
   }): Promise<ApiKey> {
     const body: Record<string, unknown> = { name: opts.name };
     if (opts.permissions) body.permissions = opts.permissions;
+    if (opts.workspaceId) body.workspace_id = opts.workspaceId;
+    if (opts.inboxIds) body.inbox_ids = opts.inboxIds;
     return this.client._request("POST", "/v1/api-keys", { body });
   }
 
   /** List API keys (secrets are masked). */
   async list(): Promise<ApiKeyList> {
     return this.client._request("GET", "/v1/api-keys");
+  }
+
+  /** Get one API key's metadata (never the secret). */
+  async get(keyId: string): Promise<ApiKey> {
+    return this.client._request("GET", `/v1/api-keys/${keyId}`);
   }
 
   /** Revoke an API key. */
@@ -963,6 +1147,31 @@ class UsageResource {
   /** Get current usage: inboxes, emails, webhooks, domains. */
   async get(): Promise<Usage> {
     return this.client._request("GET", "/v1/usage");
+  }
+}
+
+class MetricsResource {
+  constructor(private client: DeadSimple) {}
+
+  /**
+   * Bucketed sent/received/bounced/complained/opened/clicked/webhook/injection
+   * counts (GET /v1/metrics).
+   *
+   * `from` and `to` are ISO dates or datetimes (default: the last 30 days; at
+   * most 92 days). `interval` is "day" or "hour" (hour only for windows of 7
+   * days or less). `inboxIds` restricts the series to those inboxes.
+   */
+  async get(opts: {
+    from?: string;
+    to?: string;
+    interval?: MetricsInterval;
+    inboxIds?: string[];
+  } = {}): Promise<Metrics> {
+    const params: Record<string, string> = { interval: opts.interval ?? "day" };
+    if (opts.from) params.from = opts.from;
+    if (opts.to) params.to = opts.to;
+    if (opts.inboxIds && opts.inboxIds.length) params.inbox_id = opts.inboxIds.join(",");
+    return this.client._request("GET", "/v1/metrics", { params });
   }
 }
 
