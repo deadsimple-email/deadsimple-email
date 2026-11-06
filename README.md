@@ -23,7 +23,6 @@ with a verified email to move to the Free plan, keeping the same key and inboxes
 
 Listed in the [official MCP Registry](https://registry.modelcontextprotocol.io/v0/servers?search=deadsimple)
 as `email.deadsimple/dead-simple-email`, and on
-[Smithery](https://smithery.ai/server/deadsimple/dead-simple-email) and
 [Glama](https://glama.ai/mcp/connectors/email.deadsimple/dead-simple-email).
 
 **Remote (recommended)** — nothing to install:
@@ -69,7 +68,7 @@ body.
 | Language | Package | Source |
 |---|---|---|
 | Python | [`deadsimple-email`](https://pypi.org/project/deadsimple-email/) | [`python/`](python) |
-| TypeScript | [`deadsimple-email`](https://www.npmjs.com/package/deadsimple-email) | [`node/`](node) |
+| TypeScript | [`@deadsimple/email`](https://www.npmjs.com/package/@deadsimple/email) | [`node/`](node) |
 
 ```bash
 pip install deadsimple-email

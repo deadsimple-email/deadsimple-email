@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.11.0
+
+### Added
+- MCP Events on the MCP server (`deadsimple.mcp`): `events/list`,
+  `events/subscribe` and `events/unsubscribe` for `message.received` (filters
+  `inbox_id`, `from_contains`, `subject_contains`) and `message.bounced`
+  (`inbox_id`), so ChatGPT and OpenAI dots can be woken by new mail instead of
+  polling. Advertised as the `events` capability. HTTP mode with mcp 2.x only.
+
+### Changed
+- The MCP server runs on mcp 2.x (protocol 2026-07-28, stateless, alongside
+  the 1.x handshake) as well as 1.x. The `mcp` extra now allows `mcp>=1.26,<3`.
+- `http_app()` takes `json_response=`; it is no longer read from
+  `mcp.settings`, which mcp 2.x removed.
+- On mcp 2.x, tool errors keep their message (a missing key, an API refusal)
+  instead of the SDK's generic "Error executing tool".
+
 ## 0.10.0
 
 ### Added

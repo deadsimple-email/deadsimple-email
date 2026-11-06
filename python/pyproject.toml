@@ -1,6 +1,6 @@
 [project]
 name = "deadsimple-email"
-version = "0.10.0"
+version = "0.11.0"
 description = "Dead Simple Email — Python SDK for the email API for AI agents"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -24,7 +24,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-mcp = ["mcp>=1.26,<2"]  # 2.0 removed mcp.server.fastmcp; see deadsimple/mcp.py
+mcp = ["mcp>=1.26,<3"]  # 1.x and 2.x both work; MCP Events need 2.x (see deadsimple/mcp.py)
 langchain = ["langchain-core>=0.2"]
 crewai = ["crewai>=0.60"]
 openai-agents = ["openai-agents>=0.1"]
@@ -41,7 +41,7 @@ dev = [
 
 [project.urls]
 Homepage = "https://deadsimple.email"
-Documentation = "https://deadsimple.email/docs"
+Documentation = "https://deadsimple.email/docs.html"
 
 [project.scripts]
 dse = "deadsimple.cli:main"

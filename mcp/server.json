@@ -3,13 +3,13 @@
   "name": "email.deadsimple/dead-simple-email",
   "title": "Dead Simple Email",
   "description": "Give an agent its own inbox: send, receive, and pull signup codes from real email.",
-  "version": "0.2.4",
+  "version": "0.3.0",
   "websiteUrl": "https://deadsimple.email",
   "packages": [
     {
       "registryType": "pypi",
       "identifier": "deadsimple-email",
-      "version": "0.2.2",
+      "version": "0.11.0",
       "transport": {
         "type": "stdio"
       },

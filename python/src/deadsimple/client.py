@@ -439,6 +439,19 @@ class _Messages:
         """Get a single message with full body and headers."""
         return MessageFull.from_dict(self._c._request("GET", f"/v1/inboxes/{inbox_id}/messages/{message_id}"))
 
+    def list_scheduled(self, inbox_id: str) -> list[dict[str, Any]]:
+        """Messages scheduled with send_at that have not gone out yet, soonest first."""
+        return self._c._request("GET", f"/v1/inboxes/{inbox_id}/scheduled").get("scheduled", [])
+
+    def cancel_scheduled(self, inbox_id: str, message_id: str) -> dict[str, Any]:
+        """Stop a scheduled message from going out. Fails (409) once it has been sent."""
+        return self._c._request("POST", f"/v1/inboxes/{inbox_id}/messages/{message_id}/cancel")
+
+    def delete(self, inbox_id: str, message_id: str) -> dict[str, Any]:
+        """Delete a message. It disappears from every read at once and is purged
+        for good after 30 days. Sent mail still counts toward your send quota."""
+        return self._c._request("DELETE", f"/v1/inboxes/{inbox_id}/messages/{message_id}")
+
     def _reply_body(self, text_body: str, html_body: str, to, cc, bcc,
                     attachments, images, send_at=None, calendar_invite=None) -> dict[str, Any]:
         body: dict[str, Any] = {}
@@ -619,6 +632,10 @@ class _Threads:
     def get_attachments(self, inbox_id: str, thread_id: str) -> dict:
         """Get all attachments across every message in a thread."""
         return self._c._request("GET", f"/v1/inboxes/{inbox_id}/threads/{thread_id}/attachments")
+
+    def delete(self, inbox_id: str, thread_id: str) -> dict[str, Any]:
+        """Delete every message in a thread (same semantics as messages.delete)."""
+        return self._c._request("DELETE", f"/v1/inboxes/{inbox_id}/threads/{thread_id}")
 
 
 class _Drafts:
@@ -960,6 +977,13 @@ def _fetch_url_bytes(url: str, *, expect_image: bool = False) -> tuple[bytes, st
             "If it is a Google Drive link, the file must be shared as 'anyone with the "
             "link'; otherwise pass a direct image URL or a local path."
         )
+    # Same trap for documents: a private Drive or Docs link answers with a
+    # sign-in page, which would go out as an attachment named "edit".
+    if content_type == "text/html" and (host == "google.com" or host.endswith(".google.com")):
+        raise ValidationError(
+            f"{url} returned a Google web page rather than the file, so it is not "
+            "shared publicly. Attach the file's contents instead."
+        )
     return data, filename, content_type or "application/octet-stream"
 
 
@@ -1021,6 +1045,19 @@ class _Attachments:
         if inline:
             ref["inline"] = True
         return ref
+
+    def create_upload(self, filename: str, content_type: str = "") -> dict[str, Any]:
+        """Reserve an attachment_id and a presigned URL to PUT the bytes to.
+
+        For callers that hold the bytes somewhere `upload()` cannot reach, such
+        as an agent's sandbox. PUT the raw bytes to `upload_url` with the
+        returned `content_type` as Content-Type, then attach
+        `{"attachment_id": ...}` to a send.
+        """
+        body: dict[str, Any] = {"filename": filename}
+        if content_type:
+            body["content_type"] = content_type
+        return self._c._request("POST", "/v1/attachments", json=body)
 
     def _prepare(self, attachments: list[Any] | None,
                  images: list[Any] | None = None) -> list[dict[str, Any]]:
@@ -1293,6 +1330,15 @@ class _AsyncMessages:
     async def get(self, inbox_id: str, message_id: str) -> MessageFull:
         return MessageFull.from_dict(await self._c._request("GET", f"/v1/inboxes/{inbox_id}/messages/{message_id}"))
 
+    async def list_scheduled(self, inbox_id: str) -> list[dict[str, Any]]:
+        return (await self._c._request("GET", f"/v1/inboxes/{inbox_id}/scheduled")).get("scheduled", [])
+
+    async def cancel_scheduled(self, inbox_id: str, message_id: str) -> dict[str, Any]:
+        return await self._c._request("POST", f"/v1/inboxes/{inbox_id}/messages/{message_id}/cancel")
+
+    async def delete(self, inbox_id: str, message_id: str) -> dict[str, Any]:
+        return await self._c._request("DELETE", f"/v1/inboxes/{inbox_id}/messages/{message_id}")
+
     async def reply(self, inbox_id: str, message_id: str, text_body: str = "", html_body: str = "") -> SendResult:
         body: dict[str, Any] = {}
         if text_body:
@@ -1360,6 +1406,9 @@ class _AsyncThreads:
 
     async def get_attachments(self, inbox_id: str, thread_id: str) -> dict:
         return await self._c._request("GET", f"/v1/inboxes/{inbox_id}/threads/{thread_id}/attachments")
+
+    async def delete(self, inbox_id: str, thread_id: str) -> dict[str, Any]:
+        return await self._c._request("DELETE", f"/v1/inboxes/{inbox_id}/threads/{thread_id}")
 
 
 class _AsyncWebhooks:

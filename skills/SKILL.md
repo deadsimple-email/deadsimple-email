@@ -11,7 +11,8 @@ Email API for AI agents. Create inboxes, send/receive email, manage threads and 
 ## Available Tools
 
 ### Inbox Management
-- **create_inbox** — Create a new email inbox with optional display name and tags
+- **create_inbox** — Create a new email inbox with optional display name, tags, local part and custom domain
+- **list_domains** — List the account's custom domains and their verification status
 - **list_inboxes** — List all inboxes in the account
 - **delete_inbox** — Delete an inbox and all its messages
 
@@ -49,7 +50,7 @@ Create an inbox, then send a test email:
 
 ## API Key
 
-Get your API key at https://app.deadsimple.email/dashboard/settings
+Get your API key at https://app.deadsimple.email/dashboard/settings/keys
 
 ## Links
 
